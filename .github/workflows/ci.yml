@@ -33,7 +33,7 @@ jobs:
           cache: false
 
       - name: Acceptance tests
-        run: node --test "tests/*.test.mjs"
+        run: node --test tests/loadpath.test.mjs
 
       # A green suite that survives feature deletion is not a suite. v0.1.0's
       # let 14 of 20 one-line deletions pass, including the one that broke its

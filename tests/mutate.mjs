@@ -85,7 +85,7 @@ for (const [name, file, from, to] of MUTANTS) {
     if (!src.includes(from)) { broken.push(name); continue; }
     writeFileSync(p, src.replace(from, to));
     try {
-      execFileSync("node", ["--test", "tests/*.test.mjs"], { cwd: dir, stdio: "pipe", timeout: 300000 });
+      execFileSync("node", ["--test", "tests/loadpath.test.mjs"], { cwd: dir, stdio: "pipe", timeout: 300000 });
       survivors.push(name);                       // suite stayed green: the mutant lives
     } catch { /* suite failed: the mutant was killed */ }
   } finally { rmSync(dir, { recursive: true, force: true }); }

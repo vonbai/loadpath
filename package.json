@@ -23,11 +23,11 @@
     "skills/loadpath"
   ],
   "scripts": {
-    "test": "node --test \"tests/*.test.mjs\"",
+    "test": "node --test tests/loadpath.test.mjs",
     "mutate": "node tests/mutate.mjs",
     "measure": "node tests/measure.mjs",
     "contract": "node tests/contract.mjs",
-    "accept": "node --test \"tests/*.test.mjs\" && node tests/contract.mjs && node tests/mutate.mjs && node tests/measure.mjs"
+    "accept": "node --test tests/loadpath.test.mjs && node tests/contract.mjs && node tests/mutate.mjs && node tests/measure.mjs"
   },
   "engines": {
     "node": ">=18"

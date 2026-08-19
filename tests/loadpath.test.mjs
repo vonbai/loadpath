@@ -484,3 +484,17 @@ test("the active and dormant counts add up to the directories that exist", () =>
     assert.equal(active + dormant, total, `active ${active} + dormant ${dormant} must equal ${total}`);
   } finally { r.clean(); }
 });
+
+test("a repository reached through a symlinked path is still scanned", () => {
+  // Not an OS quirk: build the symlink explicitly, so the case is exercised
+  // wherever the suite runs rather than only where /tmp happens to be one.
+  const r = repo(); r.init();
+  const link = join(tmpdir(), `lp-link-${process.pid}-${Date.now()}`);
+  try {
+    r.file("p/a.go", "x\n"); r.commit("2024-01-01T00:00:00");
+    execFileSync("ln", ["-s", r.dir, link]);
+    const out = execFileSync("node", [CLI, link, "--since", "20.years"], { encoding: "utf8", env: ENV, stdio: ["ignore", "pipe", "pipe"] });
+    assert.match(out, /^1 source files/m, "a symlinked path must resolve to the same repository, not to a subdirectory of it");
+    assert.ok(!/paths are repository-relative/.test(out), "the repository root reached by a symlink is still the root");
+  } finally { rmSync(link, { force: true }); r.clean(); }
+});

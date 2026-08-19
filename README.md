@@ -68,7 +68,7 @@ node ~/.agents/skills/loadpath/scripts/loadpath.mjs /path/to/repo
 
 Everything published here is recomputed by the repository itself.
 
-- `node --test "tests/*.test.mjs"` — 34 acceptance tests over synthetic repositories built per case.
+- `node --test tests/loadpath.test.mjs` — 35 acceptance tests over synthetic repositories built per case.
 - `node tests/mutate.mjs` — 26 one-line feature deletions; **a surviving mutant fails the build.** v0.1.0's suite let 14 of 20 pass, including the line that broke its own headline claim.
 - `node tests/measure.mjs` — published figures recomputed from pinned public commits, with the corpus and SHA in the file.
 - `node tests/contract.mjs` — the skill's frontmatter, budget, pointers and vocabulary.
