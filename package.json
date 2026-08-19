@@ -1,0 +1,28 @@
+{
+  "name": "loadpath-skill",
+  "version": "0.1.0",
+  "private": true,
+  "description": "An Agent Skill that reads how a codebase carries its weight: placement, dependency direction, structural drift, and frozen boundaries.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vonbai/loadpath.git"
+  },
+  "homepage": "https://github.com/vonbai/loadpath#readme",
+  "keywords": [
+    "agent-skills",
+    "claude-code",
+    "codex",
+    "software-architecture",
+    "dependency-analysis",
+    "architecture-drift"
+  ],
+  "files": [
+    "LICENSE",
+    "README.md",
+    "skills/loadpath"
+  ],
+  "scripts": {
+    "test": "python3 -m unittest discover -s tests -v"
+  }
+}
