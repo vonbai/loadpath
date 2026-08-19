@@ -185,3 +185,84 @@ Reaching 80 of 92 directories with fan-in 3 is the orchestrator signal, as a num
 **Two citations want verification before they enter `canon.md`**, which holds a higher provenance bar than this file: the Eades–Lin–Smyth guarantee wording (|FAS| ≤ m/2 − n/6) and Louvain's complexity, which is empirical rather than a proven bound. The research pass's citation-verification agents did not return. Every empirical number in this document is a direct measurement and is reproducible.
 
 **The ELS guarantee is vacuous at this scale.** Its bound on the target was ≤219.7 edges against an actual result of 8 — 36× looser than the answer, so it certifies nothing useful. Ship the set on its measured merit, not on the guarantee.
+
+---
+
+## 8. Other fact modalities
+
+Measured on `cli/cli` (1,356 files, 11,794 commits, 714 authors), `vitejs/vite` (2,797 files, 9,591 commits), and this machine's largest local repository.
+
+**One git pass yields nearly everything.** `git log --no-merges -M --format=... --name-status` over all history costs **0.15–0.32 s** and returns file lists, add/delete/rename status, author and date together. Switching from `--name-only` to `--name-status -M` costs nothing measurable (0.265 s vs 0.256 s) and unlocks three findings below.
+
+**Two traps.** On a blobless partial clone (`--filter=blob:none`) the identical command took **2 m 03 s instead of 0.165 s** — a 700× penalty, because git refetches trees over the network. And `git blame` costs 3.4 s per 200 files, which rules out the entire line-level metric family: survival curves, half-life, burndown.
+
+### Ship
+
+**Directory relocation events.** Aggregating rename records to their highest differing path prefix yields the repository's migration history — vite's `packages → playground` (778 files), `create-app → create-vite`; cli/cli's `command → pkg`, `cmd → pkg`, `internal → pkg`. Free, about **24 tokens for six lines**, and **absent from code-maat, hercules and git-of-theseus** — all three inventories were fetched and checked. A skill about structure and migration that cannot say what this repository has already moved is missing the most on-thesis history fact available.
+
+**Code age distribution per directory — oldest, median, newest.** The triple discriminates three states that a last-touched date cannot: `internal/crypto` with all three equal is a **bulk import** (69 files in one day); `command/` with a newest well behind the repository's is a **dead predecessor**; `api/` spanning 2019→2026 is **long-lived and live**. About 183 tokens for 15 rows. Two caveats measured: it degenerates to noise on a young repository, so emit it conditionally; and it must be intersected with `git ls-files` or it reports directories that no longer exist. Without stitching the rename chain, a directory move resets the apparent age of everything in it.
+
+**Near-duplicate directory pairs by normalised line shingling.** Hash every window of K consecutive normalised non-comment lines, aggregate collisions to directory pairs. 1.2–2.2 s over ~1,000 files, about 127 tokens at K=10.
+
+The decisive result is a redundancy test: the top duplicate pairs have co-change counts of 5–38 and **appear nowhere in the top co-change list** (161, 70, 70, 66…). **Duplication and co-change are orthogonal.** Co-change says what does change together; duplication says what *should* change together and does not — clone drift, which is the dangerous case. It surfaced real architecture: `secret/set ↔ variable/set`, `search/issues ↔ search/prs`, `gpg-key/delete ↔ ssh-key/delete`.
+
+Parameter sensitivity at K=4/6/10 gave 45/18/4 pairs with the top pair stable throughout; **K=10 gives high precision and a tiny output**. Three filters each measurably matter: skip comment lines or licence headers dominate; exclude ancestor/descendant pairs; separate tests from source or test scaffolding swamps everything.
+
+**Generated and vendored classification.** A marker grep over all tracked files takes 0.057 s. github-linguist's `generated.rb` carries **74 heuristics**, the majority pure path patterns — every lockfile, `node_modules`, `Pods/`, `Carthage/Build`, `.idea` — with only a few needing a content peek (`// Code generated ... DO NOT EDIT.`, average line length > 110 for minified). `.gitattributes linguist-generated` is free and exact where declared. **This is not a report line; it is a filter that makes every other fact more accurate, and it should be built first.**
+
+**Test convention inference.** Path-regex voting over `git ls-files` correctly inferred `*_test.go` for cli/cli (362 votes) and `__tests__/` for vite (503 votes). About 15 tokens, and an agent needs it. The per-directory test *ratio* derived from it is unreliable — fixtures inside test directories and out-of-tree e2e testing both distort it.
+
+### Manifests are exact but not automatically meaningful
+
+This corrects the earlier framing. vite's `pnpm-workspace.yaml` globs match **297 of 299 `package.json` files** — not a module boundary but nearly the whole repository, including 20+ `template-*` scaffolds and 100+ playground fixtures. The real architectural modules number **three**.
+
+The filter that works: require `name` present **and** `private` absent (298 → 20), then exclude paths containing `__tests__`, `node_modules`, `playground`, `fixtures` (20 → 3). The same trap appears in Go: cli/cli's only nested `go.mod` is a CodeQL test fixture.
+
+**Ecosystem trap: vite's root `package.json` has no `workspaces` field at all** — it is pnpm-only, so a tool reading only that field misses every pnpm monorepo.
+
+**The gold tier is the six declarations that give exact intra-repo *edges*, not just boundaries**: `.csproj ProjectReference` (~2.5 M public occurrences), `tsconfig references` (~993 k), Cargo path dependencies, Gradle `project(':x')`, Maven modules, Bazel `deps`. Since source-derived edges are quarantined as inexact, this is the one place an exact edge is available for free.
+
+### Presentation format
+
+Measured on identical 5×7 data, chars/4 proxy — treat as ratios:
+
+| CSV | fixed-width | markdown | indented tree | YAML | compact JSON | indented JSON |
+|---|---|---|---|---|---|---|
+| 83 | 107 | 114 | 116 | 146 | 161 | 201 |
+
+**JSON costs about 2× a table for the same content.** Dense rows are cheap: 15 rows × 5 columns ≈ 183 tokens.
+
+**On what a model actually reads best, the evidence is thin and must not be overclaimed.** The one verified study — arXiv 2411.10541, *Does Prompt Formatting Have Any Impact on LLM Performance?* — shows GPT-3.5-turbo varying by up to **40%** across plain text, Markdown, JSON and YAML, with GPT-4 substantially more stable. That establishes format matters, especially for weaker models. **It does not establish that tables beat JSON**, and no study was found comparing tables against indented trees for hierarchical data. Token cost is measured; comprehension advantage is reasoning from mechanism, and this document should say so.
+
+Worth knowing: **repomix defaults to XML and justifies it by citing Anthropic's prompt-engineering guidance, not by any measurement** — a cited authority now widely repeated as an empirical result.
+
+**Aider's repo map is the transferable prior art**: a 1,024-token budget, PageRank over a file-reference graph to rank inclusions, and a **binary search over content volume to hit the budget within 15%** rather than a hardcoded top-N. Lines truncated at 100 characters to defend against minified code. The binary search is better than the fixed budget split recorded in `DESIGN.md` and should replace it.
+
+### Caching inverts
+
+| operation | cost |
+|---|---|
+| full history pass | 0.151 s |
+| incremental, last 200 commits | 0.012 s |
+| content shingle scan | 1.2–2.2 s |
+| `git blame`, 200 files | 3.4 s |
+| `git ls-files -s \| shasum` | ~0.01 s |
+
+**History facts are too cheap to cache** — recomputing costs less than invalidation complexity. **Content facts need the cache**, keyed per file on the blob OID from `git ls-files -s`, which correctly covers uncommitted work where `HEAD^{tree}` does not.
+
+**No surveyed baseline survives a rename.** dependency-cruiser's known-violations file identifies by (rule, from, to) — path-based. ArchUnit's `FreezingArchRule` stores full violation text and matches with a line-number-stripping matcher, so it survives line movement but not a rename. Semgrep's `--baseline-commit` leaves its matching identity undocumented. Since rename records are free in the pass already being run, **a rename-aware baseline would improve on all three.**
+
+One delta signal falls out of the age fact at no cost: *this change touches a dormant directory*. Tested against 50 commits it fired zero times — a low-noise alarm, which makes it a good delta signal and a poor default line.
+
+### Reject
+
+- **Fix-commit density / SZZ-lite** — measured flat at 5–13% across every top directory; a constant multiple of touch count, adding no ranking information.
+- **Bus factor** — the phenomenon is real (arXiv 2412.00313: 89% of 36,000+ projects lost their core team at least once, only 27% recovered), but arXiv 2508.09828 finds the widely adopted degree-based heuristic significantly outperformed. The cheap version is the inaccurate one, and bot commits (4–5%) plus email aliasing (~3%) contaminate it further.
+- **Ownership concentration** — top-owner share ranged only 0.11–0.29 and largely tracks directory size. Its one striking outlier was a dead directory the age fact already explains.
+- **Line survival, half-life, burndown** — requires blame replay; git-of-theseus concedes it is slow and hercules only claims to be less slow.
+- **Per-directory test ratio** — fixtures inside test directories and out-of-tree e2e testing make it unreliable.
+- **Encoding, line-ending, BOM and whitespace anomalies** — lint noise, not architecture.
+- **Directory depth distributions** — no evidence of decision value.
+- **DSM grids as rendered matrices** — quadratic in tokens, unaffordable at any useful size. The ordered partition remains the artifact.
+- **JSON as the report format** — about 2× a table with no evidence of better comprehension.
+- **RefactoringMiner / RefDiff** — requires AST parsing.
