@@ -1,6 +1,6 @@
 {
   "name": "loadpath-skill",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "An Agent Skill that reads how a codebase carries its weight: placement, dependency direction, structural drift, and frozen boundaries.",
   "license": "MIT",
@@ -23,6 +23,13 @@
     "skills/loadpath"
   ],
   "scripts": {
-    "test": "python3 -m unittest discover -s tests -v"
+    "test": "node --test \"tests/*.test.mjs\"",
+    "mutate": "node tests/mutate.mjs",
+    "measure": "node tests/measure.mjs",
+    "contract": "node tests/contract.mjs",
+    "accept": "node --test \"tests/*.test.mjs\" && node tests/contract.mjs && node tests/mutate.mjs && node tests/measure.mjs"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

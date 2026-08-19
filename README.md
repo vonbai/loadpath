@@ -3,72 +3,79 @@
 [![CI](https://github.com/vonbai/loadpath/actions/workflows/ci.yml/badge.svg)](https://github.com/vonbai/loadpath/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-2f6f62.svg)](LICENSE)
 
-An Agent Skill that reads how a codebase carries its weight — where code sits, which direction dependencies run, which boundaries must not move, and where the structure has drifted from the design it should express.
+An Agent Skill that traces how a codebase carries its weight — where code sits, which way dependencies run, which paths are frozen, and what the repository has already moved.
 
-在建筑里，**荷载路径**是重量从受力点传到地基的路线。每根构件要么承重，要么是装饰；你不是靠读平面图，而是靠追这条路径，才知道一个结构究竟是什么。
+在建筑里，**荷载路径**是重量传到地基的路线。依赖就是代码库的荷载路径：每个目录承受着所有 import 它的东西的重量。目录树是别处已做出的决策的**投影**——它要么表达那些决策，要么在说谎。
 
-代码库也有一条。依赖就是荷载路径：每个模块承受着所有 import 它的东西的重量。**目录树是一个投影**——投影的是别处已经做出的决策，它要么忠实表达，要么在说谎。Loadpath 追踪真实的荷载路径，把它和应当表达的设计对照，并规划改变它而不压塌任何东西的移动。
+Loadpath 追踪真实的荷载路径。它**指向值得读的代码，不替你下判断**。
 
-## What it does
+## What it emits
 
-- **Placement** — a six-rule ladder for where a new package, directory, or file belongs, including the one rule that works before any history exists.
-- **Dependency direction** — directed edges between directories, two- and three-directory cycles, and the hub where a tangle is anchored. Language-agnostic and parser-free.
-- **Layout drift** — flat sprawl, prefix-as-package, god files, test inversion, orphans and pass-through directories.
-- **Change affinity** — weighted co-change over time windows, reported as `rising`, `steady`, `at-creation`, or `fading`, so a burst at creation reads differently from coupling that keeps growing.
-- **Load-bearing walls** — frozen, vendored, generated, and archived paths as an invariant of every proposal rather than a caveat on it.
-- **Moving load** — the phases a restructuring passes through, and which of its steps are actually reversible.
+One command, about 900 tokens on a 1,300-file repository:
 
-## What it is not
+- **the distribution first** — median, p90 and max files per directory and lines per file, so every row after it is readable. `136f` means nothing until `median 7` is on the page; then it is 19× the median.
+- **activity** — what was touched recently, and what was not. A directory with no recent commits is *unmeasured*, not known to be safe.
+- **commit share** — the top author's fraction of a directory's commits, beside the raw count.
+- **relocations** — what this repository has already moved, from git's rename records. The migration already done is usually the best evidence of the one in progress.
+- **co-change** — directories changing in the same commits, one commit casting one vote split across the pairs it implies, with a per-window profile and its min–max.
+- **dependencies** — from the ecosystem's own analyzer, named in the output. Entanglement as *groups*, and how many layers deep the load path runs.
 
-It does not invent an architecture. Where a project has recorded its own module model, vocabulary, or laws, that record is the authority and the work is making the tree express it.
+`--structure` adds every directory and the entangled groups. `--dir PATH` gives one subtree file by file.
 
-It does not enforce dependency rules. Enforcement belongs in the ecosystem's own tool — `dependency-cruiser`, `import-linter`, `go-arch-lint`, `ArchUnit` — which parse properly and take a rule file. The reasoning is language-agnostic; the enforcement is not.
+## The rule it is built on
 
-It does not turn a score into a verdict. A signal opens a question and never licenses a boundary move.
+**Measurement points; you read.** The tool produces leads. A finding exists after someone reads the code a lead points at.
+
+Its predecessor inverted this and reported six dependency cycles in a Go module, where the compiler makes them impossible — every one a substring artifact. [v0.1.0 is withdrawn](https://github.com/vonbai/loadpath/releases/tag/v0.1.0) and the whole design was rewritten around not repeating it.
+
+Three consequences run through the output:
+
+- **"Not measured" is never zero.** Where no analyzer applies the output says so.
+- **A number licenses a question, not a move.** Turnover and schedule pressure leave fingerprints identical to design problems.
+- **It never invents an architecture.** Where a project records its own, that record is the authority.
+
+## Dependencies: analyzers, never guesses
+
+Loadpath does not parse imports. It runs the ecosystem's own analyzer and names it in the output, or reports Not measured.
+
+| Ecosystem | Analyzer | Granularity | Needs |
+|---|---|---|---|
+| Go | `go list -e -mod=readonly` | package = directory | `go` on PATH |
+| C# | `.csproj` `<ProjectReference>` | project | nothing |
+| Python | `grimp` | module directory | `pip install grimp` |
+| Node/TS | `madge` | file directory | a warm npx cache |
+| anything else | — | — | reported as Not measured |
+
+Calling a real analyzer is not the same as trusting it: the dominant failure mode of the Node tools is silent empty output, so every result passes a sanity check before it is believed, and a failed check reports Not measured rather than zero.
 
 ## Install
 
-Requires Python 3.9 or newer for the measurement script. No other dependencies — standard library only.
+Requires Node 18 or newer. No dependencies.
 
 ```bash
 npx --yes skills add vonbai/loadpath --global
 ```
 
-That installs to `~/.agents/skills/loadpath`, which Codex reads directly as a user-level skill and which Claude Code reaches through `~/.claude/skills/loadpath`.
+Pin a release with `vonbai/loadpath@v0.2.0`. Update with `npx --yes skills update loadpath --global`; remove with `npx --yes skills remove loadpath --global`.
 
 Verify:
 
 ```bash
-python3 ~/.agents/skills/loadpath/scripts/scan.py /path/to/repo
+node ~/.agents/skills/loadpath/scripts/loadpath.mjs /path/to/repo
 ```
 
-## Use
+## Verification
 
-Ask for it by name, or let the agent reach for it when it hits a placement or structure question:
+Everything published here is recomputed by the repository itself.
 
-```
-loadpath: where should this new package go?
-loadpath: scan this repo and tell me where the tangle is
-loadpath: I want to extract the session handling — plan the move
-```
-
-The script measures; the skill decides what the measurements mean.
-
-```
-python3 scan.py [REPO] [--since 12.months] [--top N]
-```
-
-## How much to trust the dependency graph
-
-Edges are found by looking for one directory's path inside another's non-test source. Every real import contains the path it imports, so the method is a sound over-approximation.
-
-Measured against `go list` ground truth on a 1281-file Go repository: **100% recall, 94.4% precision** once test files are excluded. Test files were the entire source of the false positives.
-
-That asymmetry is the contract: **"no cycle here" is trustworthy; "a cycle here" wants a glance.**
+- `node --test "tests/*.test.mjs"` — 34 acceptance tests over synthetic repositories built per case.
+- `node tests/mutate.mjs` — 26 one-line feature deletions; **a surviving mutant fails the build.** v0.1.0's suite let 14 of 20 pass, including the line that broke its own headline claim.
+- `node tests/measure.mjs` — published figures recomputed from pinned public commits, with the corpus and SHA in the file.
+- `node tests/contract.mjs` — the skill's frontmatter, budget, pointers and vocabulary.
 
 ## Evidence
 
-Every rule traces to a source, and `skills/loadpath/references/canon.md` records both what the research supports and what it does not. The measurement design in particular rests on four arXiv papers read in isolation — see [docs/evidence.md](docs/evidence.md) for the research trail, including the two findings that were considered and rejected.
+`DESIGN.md` holds the principles and the module design; `docs/adr/` records twelve decisions and what each traded away; `docs/research/findings.md` records what the research supports, what it rules out, and what nothing supports — including three measurements this tool emits with no predictive validation, said plainly rather than quietly kept.
 
 ## License
 

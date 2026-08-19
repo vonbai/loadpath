@@ -92,13 +92,15 @@ Four arXiv papers, read in isolation, behind the co-change scoring in `scripts/s
 
 **Stable Dependencies Principle** and **Stable Abstractions Principle** give direction to the edges that remain: depend toward things that change less often, and let a package that many depend on be abstract in proportion. Fan-in and fan-out are the crude measurement of both — a directory with high fan-out and near-zero fan-in sits at the top of the load path, which is correct for an entry point and a smell anywhere else.
 
-### What the measurement is worth
+### Where the edges come from
 
-`scripts/scan.py` finds dependency edges by looking for one directory's path inside another's non-test source. Every real import contains the path it imports, so the method is a sound over-approximation: it finds every real edge and some false ones.
+`scripts/deps.mjs` does not parse imports. It runs the ecosystem's own analyzer — `go list`, `grimp`, `madge`, or `.csproj` XML — names it in the output, and reports **Not measured** where none applies.
 
-Measured against `go list` ground truth on a 1281-file Go repository: **100% recall, 94.4% precision** once test files are excluded. Test files were the entire source of the false positives — restricting to import-shaped lines added nothing (68.1% → 68.3% before excluding tests; 94.4% → 94.6% after).
+The alternative was tried and published, and it failed in both directions. Substring matching of directory paths measured 94.3% precision at one repository root and **43.5% one directory down**, where short names like `io`, `db` and `work` match ordinary English prose in comments. Recall was worse: on standard TypeScript and Python layouts it returned nothing at all on textbook cycles, because relative imports and dotted package names never contain a repo-relative directory path. On the one Go module it was validated against it reported fourteen cycles where the compiler makes cycles impossible.
 
-That asymmetry decides how the output must be read. **"No cycle here" is trustworthy. "A cycle here" wants a glance.** It also decides what not to build: enforcement belongs in the ecosystem's own tool — `dependency-cruiser` (JS/TS), `import-linter` (Python), `go-arch-lint` (Go), `ArchUnit` (JVM), `ArchUnitNET` (.NET) — all of which parse properly and most of which take a machine-readable rule file an agent can author and diff. The reasoning is language-agnostic; the enforcement is not.
+Per-language import regexes recover recall but cannot resolve aliases, re-exports or dynamic imports — and for Python the gap is not closable by any parser: `from x import y` leaves `y` ambiguous between a module and an attribute, so a parser must emit both, which on one real corpus meant 7,644 edges against grimp's 3,061. Only the module table settles it.
+
+Calling a real analyzer is not the same as trusting it. The dominant failure mode of the Node tools is **silent empty output** — `madge` returns `{}` without `--extensions`, and `dependency-cruiser` returns `modules: []` against current TypeScript — so every result passes a sanity check, and a failed check reports Not measured rather than zero.
 
 ## Keep the projections separate
 
