@@ -265,51 +265,133 @@ def co_change(root, since, top, windows=4):
     print("  causes leave the same fingerprint as genuine design coupling.")
 
 
-def dependencies(root, tree):
-    """Directed dependency edges between directories, found by looking for one
-    directory's path inside another's non-test source. Language-agnostic and
-    parser-free: every real import contains the path it imports.
+IMPORT_RE = {
+    ".go": [r'"([^"\n]+)"'],
+    ".py": [r"^\s*from\s+([.\w]+)\s+import", r"^\s*import\s+([.\w]+)"],
+    ".rs": [r"^\s*(?:pub\s+)?use\s+([\w:]+)"],
+    ".java": [r"^\s*import\s+(?:static\s+)?([\w.]+)"],
+    ".kt": [r"^\s*import\s+([\w.]+)"],
+    ".cs": [r"^\s*using\s+(?:static\s+)?([\w.]+)"],
+    ".rb": [r"""^\s*require(?:_relative)?\s+['"]([^'"]+)['"]"""],
+    ".php": [r"^\s*use\s+([\w\\]+)"],
+    ".swift": [r"^\s*import\s+(\w+)"],
+    ".scala": [r"^\s*import\s+([\w.]+)"],
+    ".ex": [r"^\s*(?:import|alias|use)\s+([\w.]+)"],
+    ".exs": [r"^\s*(?:import|alias|use)\s+([\w.]+)"],
+    ".dart": [r"""^\s*import\s+['"]([^'"]+)['"]"""],
+}
+for _e in (".ts", ".tsx", ".js", ".jsx", ".mjs"):
+    IMPORT_RE[_e] = [r"""\bfrom\s+['"]([^'"]+)['"]""",
+                     r"""\brequire\(\s*['"]([^'"]+)['"]""",
+                     r"""\bimport\s*\(\s*['"]([^'"]+)['"]"""]
+for _e in (".c", ".h", ".cc", ".cpp", ".hpp", ".m"):
+    IMPORT_RE[_e] = [r'#\s*include\s+"([^"]+)"']
 
-    Measured against `go list` ground truth on a 1281-file Go repository:
-    100% recall, 94.4% precision once test files are excluded. Recall is the
-    load-bearing half — "no cycle here" is trustworthy, "a cycle here" wants a
-    human glance. Test files were the entire source of the false positives.
+# Extensions whose import syntax carries no path at all; a reference cannot be
+# resolved to a directory, so the language is reported as unsupported rather
+# than measured as empty.
+PATHLESS = {".swift"}
+
+
+def _refs(text, ext):
+    out = []
+    for pat in IMPORT_RE.get(ext, []):
+        out += re.findall(pat, text, re.M)
+    return out
+
+
+def _resolve(ref, from_dir, dirs, dir_tails):
+    """Map one import reference onto a known directory, or None."""
+    if ref.startswith("."):
+        if re.match(r"^\.[\w]", ref):                 # python dotted module
+            norm = ref.lstrip(".").replace(".", "/")
+            cand = os.path.normpath(os.path.join(from_dir, norm))
+        else:                                          # ./ or ../ path
+            cand = os.path.normpath(os.path.join(from_dir, ref))
+        cand = os.path.dirname(cand) if cand not in dirs else cand
+        return cand if cand in dirs else None
+    norm = ref.replace("::", "/").replace("\\", "/")
+    if "/" not in norm:
+        norm = norm.replace(".", "/")
+    norm = norm.strip("/")
+    if not norm:
+        return None
+    parts = norm.split("/")
+    # Longest suffix of the reference that names a real directory.
+    for i in range(len(parts)):
+        tail = "/".join(parts[i:])
+        if tail in dirs:
+            return tail
+        hit = dir_tails.get(tail)
+        if hit and len(hit) == 1:
+            return next(iter(hit))
+    for i in range(len(parts) - 1, 0, -1):
+        tail = "/".join(parts[i:-1]) if len(parts) > 1 else ""
+        if tail and tail in dirs:
+            return tail
+    return None
+
+
+def dependencies(root, tree):
+    """Directed dependency edges between directories, read from import syntax.
+
+    Per-language import patterns, resolved onto known directories. Where a
+    repository's language has no pattern here, that is reported rather than
+    silently counted as zero: an unmeasured graph must never read as a clean one.
+
+    This is evidence for a reading agent, not a verdict. Route enforcement, and
+    any claim that needs to be exact, to the ecosystem's own analyzer.
     """
-    section("Dependencies  (directed edges from non-test source)")
-    pkgs = {d for d, files, _ in tree if d != "." and files}
-    edges, text_of = set(), {}
+    section("Dependencies  (import references, non-test source)")
+    dirs = {d for d, files, _ in tree if d != "." and files}
+    dir_tails = defaultdict(set)
+    for d in dirs:
+        parts = d.split("/")
+        for i in range(len(parts)):
+            dir_tails["/".join(parts[i:])].add(d)
+
+    edges, seen_ext, unsupported = set(), Counter(), Counter()
     for d, files, _ in tree:
         if d == "." or not files:
             continue
-        chunks = []
         for f in files:
             if is_test(f):
                 continue
-            path = os.path.join(root, d, f)
+            ext = os.path.splitext(f)[1]
+            seen_ext[ext] += 1
+            if ext not in IMPORT_RE or ext in PATHLESS:
+                unsupported[ext] += 1
+                continue
             try:
-                with open(path, errors="replace") as fh:
-                    chunks.append(fh.read())
+                with open(os.path.join(root, d, f), errors="replace") as fh:
+                    text = fh.read()
             except OSError:
                 continue
-        text_of[d] = "\n".join(chunks)
-    for d, txt in text_of.items():
-        for p in pkgs:
-            if p == d or p.startswith(d + "/") or d.startswith(p + "/"):
-                continue          # parent/child share a prefix, not a dependency
-            if p in txt:
-                edges.add((d, p))
+            for ref in _refs(text, ext):
+                target = _resolve(ref, d, dirs, dir_tails)
+                if target and target != d:
+                    edges.add((d, target))
+
+    covered = sum(n for e, n in seen_ext.items() if e in IMPORT_RE and e not in PATHLESS)
+    total = sum(seen_ext.values())
+    if total:
+        print(f"  Read {covered}/{total} non-test source files "
+              f"({100 * covered // max(total, 1)}% of the tree)")
+    if unsupported:
+        names = ", ".join(f"{e or '(none)'}×{n}" for e, n in unsupported.most_common(6))
+        print(f"  Not read — no import pattern for: {names}")
+        print("  Treat the graph below as partial. Read those files yourself.")
     if not edges:
-        print("  none found")
+        print("  No edges resolved. This is 'not measured', not 'no dependencies'.")
         return
 
     out = defaultdict(set)
     for a, b in edges:
         out[a].add(b)
-    fan_out = Counter({d: len(v) for d, v in out.items()})
     fan_in = Counter()
-    for a, b in edges:
+    for _, b in edges:
         fan_in[b] += 1
-    print(f"  {len(edges)} edges over {len(pkgs)} directories")
+    print(f"  {len(edges)} edges over {len(dirs)} directories")
 
     two = sorted({tuple(sorted((a, b))) for a, b in edges if a in out.get(b, ())})
     print(f"\n  Two-directory cycles: {len(two)}")
@@ -326,7 +408,6 @@ def dependencies(root, tree):
     for t in sorted(three)[:15]:
         print(f"    {'  ->  '.join(t)}")
 
-    print("\n  Hubs — a directory inside many cycles is where the tangle is anchored:")
     in_cycle = Counter()
     for a, b in two:
         in_cycle[a] += 1
@@ -334,15 +415,134 @@ def dependencies(root, tree):
     for t in three:
         for d in t:
             in_cycle[d] += 1
-    for d, n in in_cycle.most_common(6):
-        print(f"    in {n:>2} cycles   fan-out {fan_out[d]:>3}  fan-in {fan_in[d]:>3}   {d}")
-    if not in_cycle:
-        print("    none")
+    if in_cycle:
+        print("\n  Hubs — a directory inside many cycles anchors the tangle:")
+        for d, n in in_cycle.most_common(6):
+            print(f"    in {n:>2} cycles   fan-out {len(out[d]):>3}  fan-in {fan_in[d]:>3}   {d}")
 
     print("\n  A cycle means neither directory can be understood, tested, or replaced")
-    print("  alone. Keep this graph separate from the co-change graph above: static")
-    print("  dependency and change affinity are different projections, and an invalid")
-    print("  edge must never be excused by an acceptable one in the other.")
+    print("  alone. Confirm each one by reading the imports before acting: this is a")
+    print("  regex over import syntax, not a resolved module graph. Keep it separate")
+    print("  from the co-change graph — static dependency and change affinity are")
+    print("  different projections of the same code.")
+
+
+def co_change(root, since, top, windows=4):
+    """Weighted co-change. Each commit casts one vote split among the directory
+    pairs it implies, so a wide tangled commit cannot mint a dense clique, and a
+    bulk-creation commit is damped further. Votes are bucketed into time windows
+    so a burst at creation reads differently from coupling that keeps rising.
+    """
+    section(f"Co-change  (weighted, {windows} time windows, since {since})")
+    try:
+        out = subprocess.run(
+            ["git", "-C", root, "log", f"--since={since}", "--name-status",
+             "--pretty=format:%x00%H %at", "--no-merges"],
+            capture_output=True, text=True, timeout=180,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"  unavailable: {e}")
+        return
+    if out.returncode != 0:
+        print("  unavailable: not a git repository, or no history")
+        return
+
+    commits, cur, when, adds, edits = [], set(), None, 0, 0
+    def flush():
+        if cur and when is not None:
+            commits.append((when, frozenset(cur), adds, edits))
+    for line in out.stdout.split("\n"):
+        if line.startswith("\x00"):
+            flush()
+            cur, adds, edits = set(), 0, 0
+            m = re.match(r"\x00[0-9a-f]{40} (\d+)", line)
+            when = int(m.group(1)) if m else None
+            continue
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        status, path = parts[0][:1], parts[-1]
+        if os.path.splitext(path)[1] not in SOURCE_EXT:
+            continue
+        d = os.path.dirname(path)
+        if not d or any(seg in SKIP_DIR for seg in d.split("/")):
+            continue
+        cur.add(d)
+        if status == "A":
+            adds += 1
+        else:
+            edits += 1
+    flush()
+
+    if not commits:
+        print("  no source-file commits in range")
+        return
+
+    times = sorted(c[0] for c in commits)
+    lo, hi = times[0], times[-1]
+    span = max(hi - lo, 1)
+
+    breadths = sorted(len(c[1]) for c in commits)
+    wide = sum(1 for b in breadths if b > 4)
+    print(f"  {len(commits)} commits touching source")
+    print(f"  Scatter: {wide} commits ({100*wide//len(commits)}%) touch >4 directories")
+    print(f"  Median directories per commit: {breadths[len(breadths)//2]}")
+
+    pair = defaultdict(lambda: [0.0] * windows)
+    own = defaultdict(lambda: [0.0] * windows)
+    for ts, dirs, adds, edits in commits:
+        k = len(dirs)
+        if k < 2:
+            for d in dirs:
+                own[d][min(int((ts - lo) * windows // span), windows - 1)] += 1.0
+            continue
+        # one commit, one vote, split across the pairs it implies
+        vote = 2.0 / (k * (k - 1))
+        # a commit that only adds files is creation, not coupling
+        if edits == 0:
+            vote *= 0.15
+        w = min(int((ts - lo) * windows // span), windows - 1)
+        ds = sorted(dirs)
+        for d in ds:
+            own[d][w] += 1.0
+        for i in range(len(ds)):
+            for j in range(i + 1, len(ds)):
+                pair[(ds[i], ds[j])][w] += vote
+
+    def trend(v):
+        first, last = v[0], v[-1]
+        later = sum(v[1:])
+        if later == 0:
+            return "at-creation"
+        if last > first and later > first:
+            return "rising"
+        if first > 0 and later < first * 0.5:
+            return "fading"
+        return "steady"
+
+    rows = []
+    for (a, b), v in pair.items():
+        total = sum(v)
+        if total < 0.5:
+            continue
+        base = min(sum(own[a]), sum(own[b]))
+        if base < 3:
+            continue
+        rows.append((total / base, total, trend(v), v, a, b))
+
+    print("\n  Strongest weighted pairs. 'score' is shared vote over the rarer")
+    print("  directory's own commits; 'profile' is that vote across time windows.")
+    if not rows:
+        print("    none above threshold")
+        return
+    for norm, total, tr, v, a, b in sorted(rows, reverse=True)[:top]:
+        prof = " ".join(f"{x:.1f}" for x in v)
+        print(f"    score {norm:5.2f}  [{prof}]  {tr:<11}  {a}  <->  {b}")
+    print("\n  Read the trend, not the score alone. 'rising' is coupling that grew after")
+    print("  both directories existed - the case worth acting on. 'at-creation' and")
+    print("  'fading' are artifacts of how the code was introduced, not of its design.")
+    print("  A high score still licenses a question, never a boundary move: non-technical")
+    print("  causes leave the same fingerprint as genuine design coupling.")
 
 
 def main():

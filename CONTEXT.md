@@ -1,21 +1,67 @@
-# Context
+# Loadpath
 
-Vocabulary this project uses precisely. A term here means what this file says, not what it means in ordinary use.
+A skill that keeps a codebase's structure legible while an agent builds in it. This glossary fixes the words; the reasoning lives in `DESIGN.md` and `docs/adr/`.
 
-**Load path** — how dependency runs through a codebase: each directory bears the weight of everything that imports it. The metaphor is structural engineering, where the load path is how weight travels from where it is applied down to the ground. Tracing it is how you learn what a structure really is.
+## Language
 
-**Projection** — the directory tree understood as the physical shadow of decisions made elsewhere: the product's subjects, the architecture's decisions, and observed reality. A tree either expresses those faithfully or lies about them.
+### What the tool produces
 
-**Drift** — divergence between a projection and the design it should express. Drift requires a referent: structure judged from code alone has nothing to be drift *from*.
+**Lead**:
+An emitted measurement that points at code worth reading. It is the tool's only output class.
+_Avoid_: finding, signal, issue, violation, smell
 
-**Signal** — a countable measurement that opens a question. A signal never closes one. Non-technical causes leave fingerprints identical to genuine design problems, so no signal licenses a boundary move.
+**Finding**:
+What exists after the agent has read the code a Lead pointed at and confirmed what is there. The tool never produces one.
+_Avoid_: result, detection, verdict
 
-**Subject** — what a directory is *about*, named in the project's own vocabulary. `billing`, `session`, `market`. Not a role (`managers`), not a layer (`services`), not a gap-holder (`utils`, `common`, `shared`, `core`, `misc`).
+**Exact**:
+A number read directly from the filesystem or from git history. Counting files, counting lines, counting commits.
+_Avoid_: accurate, reliable, verified
 
-**Seam** *(Michael Feathers)* — a place where behaviour can be altered without editing at that place. Where the seam falls on disk is this project's concern; what sits behind it is `codebase-design`'s.
+**Inferred**:
+A number produced by guessing at meaning without a parser. Confined to one module and labelled at every use.
+_Avoid_: estimated, approximate, heuristic
 
-**Load-bearing path** — a path declared frozen, vendored, generated, or archived. An invariant of every proposal, not a caveat on it.
+**Not measured**:
+A first-class result meaning no method applied here. Distinct from a measurement of zero, and never rendered as one.
+_Avoid_: none, empty, clean, no results
 
-**Projection separation** — static dependency, change affinity, runtime interaction, and shared data are different graphs over the same code. They are read side by side and never merged; an acceptable edge in one never excuses an invalid edge in another.
+### What the tool measures
 
-**Sound over-approximation** — the dependency detection finds every real edge and some false ones. The consequence is asymmetric trust: absence of a cycle is trustworthy, presence of one wants a glance.
+**Affinity**:
+Directories that change in the same commits. Measured from history, exact.
+_Avoid_: coupling, temporal coupling, change coupling
+
+**Dependency**:
+One directory needing another to compile or run. Measured by a native analyzer, or Not measured.
+_Avoid_: coupling, boundary, reference
+
+**Load path**:
+The direction dependency runs through a codebase — each directory bears the weight of everything that imports it. The reading that gives the project its name.
+_Avoid_: dependency chain, call graph
+
+### What the structure means
+
+**Projection**:
+The directory tree understood as the physical shadow of decisions made elsewhere — the product's subjects and the architecture's decisions. Used only of the tree.
+_Avoid_: reflection, mapping, view
+
+**Axis**:
+One independent way of looking at the same code — inventory, history, dependency. Two axes agreeing is evidence; one axis alone is a Lead.
+_Avoid_: projection, dimension, signal source
+
+**Drift**:
+Divergence between the tree and the design it should express. Requires a declared design to diverge from; a tree read alone cannot show it.
+_Avoid_: erosion, decay, rot
+
+**Subject**:
+What a directory is about, named in the project's own vocabulary. `billing`, `session`, `market` — not a role, not a layer, not a name for the absence of one.
+_Avoid_: concern, domain, component, module
+
+**Seam** *(Michael Feathers)*:
+A place where behaviour can be altered without editing at that place. Where a seam falls on disk is this project's concern; what sits behind it belongs to `codebase-design`.
+_Avoid_: boundary, interface, layer
+
+**Load-bearing path**:
+A path the project has declared frozen, vendored, generated, or archived. An invariant of every proposal.
+_Avoid_: excluded, ignored, protected
