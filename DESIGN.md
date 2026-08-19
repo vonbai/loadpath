@@ -78,3 +78,25 @@ The file boundary *is* the exact/inferred seam, visible from a directory listing
 The tool emits measurements and the agent judges them. v0.1.0's verdicts were wrong three times — its cycles were fabricated, its `rising` label inverted on constant coupling, its god-file threshold was unsourced — while the underlying figures were never wrong. A line count, a commit count, and a per-window profile are facts. "God file", "rising", and "this is a cycle" are judgements, and they belong to the reader.
 
 Progressive disclosure carries this: the default output orients at directory level for roughly 2k tokens on a 1400-file repository, drill-downs are requested by name, and the footer signposts what can be asked next. Withholding a fact is not disclosure; pre-digesting it into a verdict is not either.
+
+## Progressive disclosure, per module
+
+Disclosure is an algorithm, not a flag. Each module discloses in three layers, and the layer boundary is chosen so the agent can decide where to look next without paying for detail it will not read.
+
+| | L0 — orient | L1 — structure | L2 — detail |
+|---|---|---|---|
+| **Inventory** | robust distribution summary plus deviation ranking, O(F log F) | adaptive tree rollup by greedy top-down budget split, O(V log V) | file level for one named subtree, O(F_subtree) |
+| **History** | age, commit count, active/dormant split, O(C) | weighted co-change with breadth cap and time windows, O(Σ min(k,cap)²) | per-directory churn |
+| **Dependency** | which analyzer ran, layers deep, entangled group count, NCCD — or Not measured, O(V+E) | DSM layer table with entangled groups and their anchors, O(V+E) | edge list and back edges |
+
+**L0 is the norms and the outliers. L1 is the structure. L2 is the detail.** The L0 algorithm is the same in every module: summarise the distribution, then rank by deviation from it.
+
+### Why the distribution comes first
+
+`cmd/cotx 56f` is uninterpretable alone. `files per directory: median 7, p90 32, max 136` makes every later row readable, and turns `136f` into *19× the median* — which is a fact about the distribution, checkable and exact, not a verdict. One line buys the meaning of every line after it.
+
+Measured: an 18-line L0 costs about 164 tokens on a 1281-file repository and carries the file and line totals, tree depth, language mix, test ratio, both distributions, repository age, the active-versus-dormant split, the modules declared by manifests, and the four directories furthest from the repository's own norms. It also answers which analyzer to run, because the manifest names the ecosystem.
+
+### Why the tree rollup must adapt
+
+A flat directory table does not scale. Measured on a 3154-directory repository it is about 14,000 tokens — the same failure as the per-file table it replaced. The greedy budget split gives each subtree an allowance proportional to its mass and collapses any subtree that cannot afford a line into its parent's `+N more`. Measured at one budget: 141 directories render in 16 lines, 3154 in 31. The summary scales with the repository's shape rather than its size.
