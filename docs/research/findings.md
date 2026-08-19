@@ -266,3 +266,61 @@ One delta signal falls out of the age fact at no cost: *this change touches a do
 - **DSM grids as rendered matrices** — quadratic in tokens, unaffordable at any useful size. The ordered partition remains the artifact.
 - **JSON as the report format** — about 2× a table with no evidence of better comprehension.
 - **RefactoringMiner / RefDiff** — requires AST parsing.
+
+---
+
+## 9. Which measurements have empirical support
+
+A NeuroArxiv Research Run over cs.SE, cs.HC and cs.LG, ten papers retained, five read in isolation, three at full text. It bears directly on which columns L0 should carry — including three that turn out to have none.
+
+**Scope first, or the conclusions will be misapplied.** Every paper here studies *defect prediction*. Loadpath is not a defect predictor and must never imply risk. A finding of "no evidence this predicts defects" therefore does not condemn a measurement whose justification is a design principle; it condemns any wording that implies risk. That distinction governs everything below.
+
+### The one measurement that ranked first
+
+**Commit-share concentration, not commit count.** In a defect model over 25 releases of 7 systems with 59 confounders and 54 static product metrics, `OWN_COMMIT` — the top author's share of commits to a file — took the first ScottKnott ESD rank group and `MAJOR_COMMIT` — the count of authors above a 5% share — the second, above every static size and complexity metric. In local explanation, `OWN_COMMIT` was the single top-supporting metric for a median 97% of correctly predicted defective files.
+
+**The commit count already collected is the raw ingredient, not the metric that won.** The winner is a normalised ratio. The change is small: key the per-window accumulator by `(path, author)` rather than `path`, and emit the top author's share, the count of authors above a stated 5% share, and the count of files with zero commits in that window — beside the raw count, never instead of it.
+
+**Blame-derived line ownership ranked sixth and was explicitly called weakly associated with defect-proneness.** Combined with its 3.4 s per 200 files, `git blame` is ruled out twice over. If blame data ever appears in this tool it is an authorship figure, never a risk figure.
+
+### What the evidence demotes
+
+None of these reached any project's top-3 importance group across six projects: diffusion counts of files and directories touched, distinct-developer counts, developer experience, review-comment counts. And **`AGE` — time since the modified files last changed — reached top-3 in only one project of six**, which caps how much weight a last-touched date should carry. That is a direct correction to the L0 design, which had promoted it.
+
+The one classic repository metric that did reach a top-3 group, in four of six projects, is **`LT`: the number of lines in the modified files *before* the change**. Pre-change file size is the size figure worth surfacing, which supports keeping lines-per-file.
+
+The strongest predictors found anywhere in the evidence are structural, not historical — AST nodes added, maximum depth of added nodes, method count — and they outrank every history metric. Three of the four need a grammar and a per-change diff. Only method count and pre-change method-body size are snapshot-computable, and they are the honest candidates if language-agnosticism is ever relaxed.
+
+### Three columns with no support, stated plainly
+
+- **Co-change pairs received support from no retained paper.** Its nearest relative, unique changes to the modified files, reached no project's top-3. Whether co-change weight predicts anything is unresolved by this evidence. It stays, on the Common Closure Principle — a design argument, not a predictive one — and must be labelled as such.
+- **Test-file counts were evaluated by no retained paper** as a predictor of anything.
+- **Every retained result is per-file or per-commit. Nothing licenses aggregating any of them to a directory**, which is the unit this tool emits. Directory rollups inherit no support from this evidence and must not borrow its authority.
+
+### The pitfall that governs the dormant column
+
+Between **19% and 67% of files received no commits during a release cycle**, so a window-scoped concentration figure is undefined exactly there — and **0% to 18% of those untouched files still carried a post-release defect**.
+
+> Silence in the history reads as safety, and it is not.
+
+Any dormant-directory count must be worded so a reader cannot draw the opposite conclusion.
+
+### Presentation: an average can be flattering and wrong at once
+
+Measured, on identical predictions: a model reached **ECE 2–3%, which looks excellent, while its MCE hit 99–100%**, because overconfident and underconfident regions cancel in the mean. Separately, a logistic regression on added lines alone scored **AUC 0.75 with recall 0.078** — a raw size count producing a plausible ranking while detecting almost nothing.
+
+Three constraints follow for every aggregate this tool prints:
+
+1. **Emit the spread and the worst case beside the average.** For the time-window profile that means the min–max across windows, not just the weighted total.
+2. **State the bucketing as a parameter.** On identical data, 50 bins produced systematically higher miscalibration than 15, and equal-width bins higher than adaptive. A window count is a parameter, and an undisclosed parameter is a hidden assumption.
+3. **Flag when mass concentrates in one bucket.** That concentration is the signal; the mean over it is not.
+
+A fourth guards against self-deception: **compute every measurement as-of the point of use.** Training on data unavailable at that point collapsed one model's reported F-measure by 38.5% and 45.7% once removed — hindsight inflates apparent signal.
+
+And a caution about repair: post-hoc correction can fix the number and break the decision. Platt scaling cut one model's ECE from 35% to 2–3% while compressing its probabilities below the decision threshold, so almost nothing would have been flagged.
+
+### Open threads this run did not close
+
+No retained paper measured whether any presentation actually reduces over-trust in a reader, human or agent. The presentation half rests on design argument and on evidence about what figures hide, not on measured reader behaviour — and that is partly a search-plan limitation, since `trust calibration` in cs.HC returned autonomous-vehicle work rather than developer-tool research. A second run targeting static-analysis warning actionability, overreliance, and cognitive forcing functions would be the honest way to close it.
+
+The 5% major-contributor threshold is inherited from earlier work rather than derived, and no retained paper tested its sensitivity.
