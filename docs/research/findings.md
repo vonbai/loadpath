@@ -161,3 +161,27 @@ Output token cost, 1454-file repository:
 | **Per directory only** | **141** | **~2,260** |
 
 Directory-level default, file-level on request.
+
+---
+
+## 7. Additions from the full algorithm report
+
+**DSM layering makes the "backwards edge" signal implementable.** SKILL.md carried a signal it admitted could not fire — "only a project that has declared a direction can have this one." A DSM order is a *derived* direction, so edges running against it are the closest checkable approximation, and unlike a cycle list the claim is falsifiable against a project's stated architecture. The signal moves from unimplementable to computed, for free.
+
+**The per-directory transitive reach table quantifies "load with nothing above it".**
+
+```
+depends on 89 of 92 dirs   fan-out 13  fan-in 2   cmd/cotx
+depends on 80 of 92 dirs   fan-out 71  fan-in 3   internal/application
+depends on 81 of 92 dirs   fan-out 18  fan-in 0   internal/testsupport/packet0001
+```
+
+Reaching 80 of 92 directories with fan-in 3 is the orchestrator signal, as a number rather than an impression.
+
+**Do not render an ASCII DSM matrix.** At 92 directories that is a 92×92 grid — unreadable in a terminal and worthless to an agent reading text. The ordered partition with layer numbers is the artifact; the matrix is one way to draw it, and the wrong one here.
+
+**If community detection is ever built anyway, only one form is honest.** Run the optimizer 20× with different seeds and report only the node pairs that land together in ≥95% of runs, labelled *directories that every run groups together* rather than as a partition. It degrades gracefully to "no stable grouping found", which is the correct answer on the graph measured. Roughly 70 lines. Still not recommended — see ADR 0007.
+
+**Two citations want verification before they enter `canon.md`**, which holds a higher provenance bar than this file: the Eades–Lin–Smyth guarantee wording (|FAS| ≤ m/2 − n/6) and Louvain's complexity, which is empirical rather than a proven bound. The research pass's citation-verification agents did not return. Every empirical number in this document is a direct measurement and is reproducible.
+
+**The ELS guarantee is vacuous at this scale.** Its bound on the target was ≤219.7 edges against an actual result of 8 — 36× looser than the answer, so it certifies nothing useful. Ship the set on its measured merit, not on the guarantee.
