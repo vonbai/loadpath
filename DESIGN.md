@@ -100,3 +100,49 @@ Measured: an 18-line L0 costs about 164 tokens on a 1281-file repository and car
 ### Why the tree rollup must adapt
 
 A flat directory table does not scale. Measured on a 3154-directory repository it is about 14,000 tokens — the same failure as the per-file table it replaced. The greedy budget split gives each subtree an allowance proportional to its mass and collapses any subtree that cannot afford a line into its parent's `+N more`. Measured at one budget: 141 directories render in 16 lines, 3154 in 31. The summary scales with the repository's shape rather than its size.
+
+## What the agent actually receives
+
+A skill's markdown is paid once, when it triggers. A script's output is paid on **every invocation**, and no budget constrains it. Measured on a 1281-file repository: the description costs 165 tokens per turn, SKILL.md 2,818 tokens once, and one scan 3,335 tokens each time it runs.
+
+**The output budget is therefore the primary design constraint, and SKILL.md's length is the secondary one.** The published 500-line guidance governs the markdown; nothing governs the thing that actually dominates.
+
+### One rule generates the output design
+
+Whatever the tool computes, the agent receives as a linear sequence of tokens. A graph does not arrive as a graph; it arrives as whichever serialisation was chosen. And a model cannot reliably chase pointers — locating a line, holding it, and finding the next is exactly where multi-hop reasoning over serialised edges breaks down.
+
+> **Any fact that takes more than one lookup to obtain must be precomputed.**
+
+This is what v0.1.0 got wrong in *shape*, independently of its accuracy: it handed over a list of triangles, which is a fragment of a traversal's input, where the reader needed the traversal's result. An edge list asks the agent to find cycles, compute reach, and sort topologically — three things it cannot do reliably. Strongly connected components, layer numbers, and transitive reach counts are the same information after the traversal has been done for it.
+
+The division of labour follows: **the tool traverses, the agent judges.** Traversal is what a model is bad at and a program is exact at; judgement is the reverse.
+
+### The shape that survives serialisation
+
+A sorted table of self-contained rows, each directory a feature vector — files, lines, tests, commits, age, reach, layer, group.
+
+- **No cross-line joins.** Each row is readable alone, because the norms are stated once at the top.
+- **Order carries meaning.** Rows are ranked by deviation from those norms, so the agent does not have to sort — something it can do but not reliably across many rows.
+- **No raw graphs.** Only traversal results.
+
+Paths carry the tree, and a full path on every row beats indentation: indentation's failure mode is attributing a row to the wrong parent, and it fails silently, while verbosity only costs tokens. Sorted paths group as a tree anyway.
+
+No embeddings. The one vector worth having is that feature row, and similarity reasoning over it belongs to the agent. Path-token similarity measures naming convention rather than structure — the same trap as connascence locality, where 68% of edges sat at distance 2 purely because the tree was flat.
+
+## Structural direction is the skill's; domain direction is the project's
+
+The skill must be able to say which way to move without inventing an architecture. The line is that **structural invariants hold for any domain, and domain shape does not**.
+
+| The skill says | The skill never says |
+|---|---|
+| Dependencies should run one way; a cycle is a fact with known costs | whether `billing` and `settlement` belong apart |
+| Things that change together belong together, and it is measurable | what this domain's subjects are |
+| Transitive reach should fall; NCCD toward 1 | which architectural style to adopt |
+| Load-bearing paths do not move | what the target architecture is |
+| A migration separates prepare, coexist, migrate, cut over, stabilize, remove | |
+
+Splitting one subject from another is a domain decision. Making the dependency graph acyclic is not.
+
+"Reasonable" then has two sources, and neither is invented. The first is **the repository's own norms** — whether 136 files in a directory is a problem is judged against this repository's median of 7, not against a threshold this skill made up. The second is **a structural invariant stated with its cost**: not "you should split this", but "this directory is transitively reachable from 80 others, so a change to any one of its subjects reaches all 80; splitting by subject lowers that number, and costs N moved files and one broken import path."
+
+That is knowledge about consequences, and the agent applies it. A third source sits above both: where the project has recorded its own architecture, that record is the domain authority, and this skill reads it without writing it.
