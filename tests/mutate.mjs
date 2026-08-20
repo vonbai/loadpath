@@ -71,17 +71,13 @@ const MUTANTS = [
   ["vendored and dot directories enter the population", `${S}/scan.mjs`,
     "const closed = (seg) => SKIP_DIR.has(seg) || (seg.startsWith(\".\") && seg !== \".github\");",
     "const closed = () => false;"],
-  ["a co-change pair may name a directory the tree no longer has", `${S}/scan.mjs`,
-    "if (!live.has(a) || !live.has(b)) { dropped++; continue; }", ""],
-  ["the drop of those pairs is not disclosed", `${S}/report.mjs`,
-    "if (hist.dropped) out.push(", "if (false) out.push("],
-  ["history admits any path with a source extension again", `${S}/scan.mjs`,
-    "if (!admit(p) || !inScope(p)) continue;", "if (!SOURCE_EXT.has(extname(p)) || !inScope(p)) continue;"],
+  ["history is not joined to the exact current-file population", `${S}/scan.mjs`,
+    "if (!admit(p) || !inScope(p) || !liveFiles.has(p)) continue;", "if (!admit(p) || !inScope(p)) continue;"],
   // Two mutants edit one line, because one line now carries two decisions:
   // which paths vote, and which paths count as an edit rather than a creation.
   ["edits are counted over every path in the commit again", `${S}/scan.mjs`,
-    "if (!admit(p) || !inScope(p)) continue;",
-    "if (st[0] === \"A\") cur.adds++; else cur.edits++; if (!admit(p) || !inScope(p)) continue;"],
+    "if (!admit(p) || !inScope(p) || !liveFiles.has(p)) continue;",
+    "if (st[0] === \"A\") cur.adds++; else cur.edits++; if (!admit(p) || !inScope(p) || !liveFiles.has(p)) continue;"],
   ["the activity horizon is not capped at the convention", `${S}/scan.mjs`,
     "Math.max(1, Math.min(90, Math.floor(span / 86400)))", "Math.max(1, Math.floor(span / 86400))"],
   ["the structure table seeds its search at twenty rows", `${S}/report.mjs`,
@@ -96,14 +92,16 @@ const MUTANTS = [
     "comps.push(comp.sort());", "if (comp.length === 1) comps.push(comp.sort());"],
   ["go is probed with the wrong flag", `${S}/deps.mjs`,
     'has("go", ["version"])', 'has("go", ["--version"])'],
-  [".csproj references are not read", `${S}/deps.mjs`,
-    "/<ProjectReference\\s+Include\\s*=\\s*\"([^\"]+)\"/gi", "/__never__/gi"],
+  ["commented .csproj references become edges", `${S}/deps.mjs`,
+    'if (xml.startsWith("<!--", at)) { const end = xml.indexOf("-->", at + 4); at = end < 0 ? xml.length : end + 3; continue; }',
+    'if (xml.startsWith("<!--", at)) { at += 4; continue; }'],
+  ["single-quoted .csproj references are not read", `${S}/deps.mjs`,
+    'const include = /\\bInclude\\s*=\\s*(["\'])([\\s\\S]*?)\\1/i.exec(tag);',
+    'const include = /\\bInclude\\s*=\\s*(\")([\\s\\S]*?)\\1/i.exec(tag);'],
   ["the size ranking is unsorted", `${S}/report.mjs`,
     "].sort((a, b) => b.files - a.files)", "]"],
   ["the window profile is not printed", `${S}/report.mjs`,
     "[${prof} ]", "[]"],
-  ["history keeps directories that no longer exist", `${S}/scan.mjs`,
-    "for (const d of [...dirs.keys()]) if (!live.has(d)) dirs.delete(d);", ""],
   ["symlinked paths are compared unresolved", `${S}/loadpath.mjs`,
     "try { root = realpathSync(root); } catch { /* keep the literal path */ }", ""],
 
@@ -138,9 +136,13 @@ const MUTANTS = [
   ["the orient view loses its dependency line", `${S}/report.mjs`,
     'out.push(renderDeps(spans));', "void 0;"],
   ["the installed copy cannot name its version", `${S}/loadpath.mjs`,
-    'const VERSION = "0.3.0";', 'const VERSION = "0.0.0";'],
+    'const VERSION = "0.3.1";', 'const VERSION = "0.0.0";'],
   ["only the root Go module is analysed", `${S}/deps.mjs`,
-    "const mods = goModules(root);", "const mods = [root];"],
+    "const { mods, unsearched } = goModules(root);", "const { mods, unsearched } = { mods: [root], unsearched: 0 };"],
+  ["the Go module path boundary is treated as a lexical prefix", `${S}/deps.mjs`,
+    'const internal = (p) => p === prefix || p.startsWith(prefix + "/");', 'const internal = (p) => p.startsWith(prefix);'],
+  ["the Go module walk drops its unsearched count", `${S}/deps.mjs`,
+    "if (d > GO_MODULE_DEPTH) { unsearched++; return; }", "if (d > GO_MODULE_DEPTH) { return; }"],
   ["a partial module resolution is not disclosed", `${S}/deps.mjs`,
     "const note = reached < mods.length", "const note = false"],
   ["the token bound goes back to a general prose ratio", `${S}/scan.mjs`,
@@ -200,6 +202,10 @@ const MUTANTS = [
     "if (!kept.size) return fam.paths.length", "if (false) return fam.paths.length"],
   ["several spans print without their labels", `${S}/report.mjs`,
     "(spans.length > 1 ?", "(false ?"],
+  ["two spans sharing paths overwrite each other's group identity", `${S}/report.mjs`,
+    "if (!of.has(span)) of.set(span, new Map());", "if (!of.has(span)) of.set(span, of.values().next().value ?? new Map());"],
+  ["Node measures only its first source root", `${S}/deps.mjs`,
+    "args.push(...srcDirs);", "args.push(srcDirs[0]);"],
   ["a private application's manifest is not a declaration", `${S}/scan.mjs`,
     "|| (Boolean(j.private) && entries.some((x) => x.isDirectory() && APP_DIR.has(x.name)))", ""],
   ["copies of one scaffold each count as a module", `${S}/scan.mjs`,
@@ -225,10 +231,14 @@ const MUTANTS = [
     '.replace(/([a-z0-9])([A-Z])/g, "$1 $2")', ""],
   ["entangled groups are compared by count instead of by membership", `${S}/report.mjs`,
     'const key = (g) => [...g].sort().join("\\0");', "const key = (g) => String(g.length);"],
+  ["dependency node changes disappear from snapshot comparison", `${S}/report.mjs`,
+    "if (b.nodes !== n.nodes) changed.push(", "if (false) changed.push("],
   ["compare stops saying that history lags a move", `${S}/report.mjs`,
     "for (const l of LAG) out.push(l);", ""],
   ["the snapshot loses the field that identifies it", `${S}/scan.mjs`,
     "    version,", ""],
+  ["a malformed snapshot reaches the renderer", `${S}/loadpath.mjs`,
+    "if (!valid) {", "if (false) {"],
   // The command line. Each of these restores a departure between what was
   // typed and what ran, made without a word on either stream.
   ["an unknown flag is ignored rather than refused", `${S}/loadpath.mjs`,
@@ -245,7 +255,9 @@ const MUTANTS = [
   ["a second repository is dropped instead of refused", `${S}/loadpath.mjs`,
     "if (rest.length > 1) fail(", "if (false) fail("],
   ["--dir stops naming the flags it ignores", `${S}/loadpath.mjs`,
-    "if (ignored.length) o.notices.push(", "if (false) o.notices.push("],
+    "if (ignored.length) o.notices.push(`--dir prints one subtree and stops", "if (false) o.notices.push(`--dir prints one subtree and stops"],
+  ["--compare stops naming the flags it ignores", `${S}/loadpath.mjs`,
+    "if (ignored.length) o.notices.push(`--compare prints only the recorded delta", "if (false) o.notices.push(`--compare prints only the recorded delta"],
 
   // Disclosure. Every one of these is a list that ends without saying how many
   // it did not name, which is a list claiming to be the whole list.
@@ -311,17 +323,14 @@ if (list) { MUTANTS.forEach(([n], i) => console.log(`${String(i + 1).padStart(2)
 const run = promisify(execFile);
 
 // One mutant is a whole acceptance run over its own copy of the tree, and the
-// suite outgrew doing them one at a time: 82 exercised mutants at 15 seconds
-// each is 21 minutes of wall clock, on the machine this is actually run on.
-// That matters because this is a local gate — the four suites are what a
-// change passes before it lands, not what a server reports afterwards — and a
-// twenty-minute gate is a gate that gets skipped, which is the exact failure a
-// mutation check exists to prevent.
+// suite outgrew doing them one at a time.
+// That matters because the tag-triggered release battery blocks publication;
+// a needlessly serial twenty-minute check is a release gate that gets skipped,
+// which is the exact failure a mutation check exists to prevent.
 //
 // The mutants share nothing: a separate mkdtemp copy each, and every fixture
 // the suite builds is a mkdtemp of its own. So a pool moves the clock and not
-// one verdict — measured at 4.6 minutes across six lanes, with the same 87
-// verdicts in the same order.
+// one verdict; the same results are printed in declaration order.
 //
 // One lane fewer than the machine has, and never more than six: each lane's
 // suite spawns git and go of its own, so lanes past that contend rather than

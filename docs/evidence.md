@@ -125,5 +125,3 @@ Where this measures less than the page suggests, with what each one would take t
 - the Python analyzer looking only at the repository root — needs grimp installed, and the suite does not `pip install`.
 
 Two of the five guard the read-only law, which is why it is stated in `DESIGN.md` and asserted by two acceptance tests rather than left to the mutation count.
-
-**A walk with a depth bound is a truncation, and one of the two still says nothing.** Two analyzers bound their own search. The `.csproj` walk stops 12 directories below where it was rooted and returns the directories it refused as data, which the span renders on a line of its own — it had gathered that count and dropped it on the floor for as long as the bound had existed, which made it the one truncation in the tool that stated nothing. The Go module walk stops 4 directories down and counts nothing at all, so a `go.mod` nested deeper than that leaves the span quietly short: the same shape, still open, and closable the same way.

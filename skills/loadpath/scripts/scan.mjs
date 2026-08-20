@@ -351,10 +351,11 @@ function normalizeSince(input) {
   return canonical === t ? { since: t } : { since: canonical, rewritten: t };
 }
 
-// `live` is the set of directories the inventory found on disk, and it is not
-// optional: the two writers report one page, and a history figure that has not
-// been joined against the tree can name a directory the reader cannot open.
-function history(root, { since: requested, windows, breadthCap, prefix = "", submodules = new Set(), live }) {
+// `liveFiles` is inventory's exact admitted population; `live` is the
+// directories those files occupy. Neither is optional: history cannot inspect
+// a past blob's generated marker, so joining every vote to today's inventory
+// is the only way both halves of the page describe the same code.
+function history(root, { since: requested, windows, breadthCap, prefix = "", submodules = new Set(), live, liveFiles }) {
   const norm = normalizeSince(requested);
   if (norm.ambiguous) {
     return { available: false, reason: `--since ${norm.ambiguous} is ambiguous — git reads it as a day of the month, not a duration. Write it as ${/^\d+m$/i.test(norm.ambiguous) ? `${parseInt(norm.ambiguous, 10)}.months or ${parseInt(norm.ambiguous, 10)}.minutes` : "N.days, N.weeks, N.months or N.years"}.` };
@@ -422,7 +423,7 @@ function history(root, { since: requested, windows, breadthCap, prefix = "", sub
         if (!from || !to) { skipped++; continue; }
         // The vote is a lead and takes the population rule with everything else
         // that points somewhere.
-        if (admit(to) && inScope(to)) { cur.paths.push(to); cur.edits++; }
+        if (admit(to) && inScope(to) && liveFiles.has(to)) { cur.paths.push(to); cur.edits++; }
         // The relocation is a record, and takes no filter at all. What a
         // repository moved is what it moved: a 482-file specs -> archive is the
         // migration it has already done, which is the best evidence of the one
@@ -438,7 +439,7 @@ function history(root, { since: requested, windows, breadthCap, prefix = "", sub
       } else {
         const p = fields[++i];
         if (!p) { skipped++; continue; }
-        if (!admit(p) || !inScope(p)) continue;
+        if (!admit(p) || !inScope(p) || !liveFiles.has(p)) continue;
         cur.paths.push(p);
         // An edit is what separates maintenance from creation, so it is counted
         // over the same paths the votes are. Counted over every path in the
@@ -476,7 +477,7 @@ function history(root, { since: requested, windows, breadthCap, prefix = "", sub
     commits: withSource, fileLast,
     relocations: [...relocations.values()].filter((r) => r.n >= 3).sort((a, b) => b.n - a.n),
     ...perDirectory(withSource, when, live),
-    ...coChange(withSource, when, windows, breadthCap, live),
+    ...coChange(withSource, when, windows, breadthCap),
   };
 }
 
@@ -519,11 +520,6 @@ function perDirectory(commits, { lo, hi, span }, live) {
       e.authors.set(c.author, (e.authors.get(c.author) || 0) + 1);
     }
   }
-  // History knows directories the tree no longer has. The join happens here,
-  // in the measurement and exactly once, so that every renderer is handed the
-  // same population and no count can exceed the number of directories there
-  // are.
-  for (const d of [...dirs.keys()]) if (!live.has(d)) dirs.delete(d);
   // Commit-share concentration: the top author's share, and how many authors
   // clear a stated 5% share. The ratio ranked first in a defect model where the
   // raw count did not — but it is undefined where activity is absent, so it is
@@ -556,7 +552,7 @@ function perDirectory(commits, { lo, hi, span }, live) {
 const CO_FLOOR = 0.5;
 const CO_SUPPORT = 3;
 
-function coChange(commits, { lo, span }, windows, cap, live) {
+function coChange(commits, { lo, span }, windows, cap) {
   const pair = new Map();
   const own = new Map();
   let capped = 0;
@@ -581,22 +577,15 @@ function coChange(commits, { lo, span }, windows, cap, live) {
     }
   }
   const pairs = [];
-  let dropped = 0;
   for (const [k, v] of pair) {
     const [a, b] = k.split("\0");
     const total = v.reduce((x, y) => x + y, 0);
     const base = Math.min(own.get(a) || 0, own.get(b) || 0);
     if (total < CO_FLOOR || base < CO_SUPPORT) continue;
-    // A pair naming a directory the tree no longer has cannot be followed, and
-    // it outranked everything that could: the two strongest rows on a pinned
-    // corpus named four deleted directories. Dropped after the floor, so the
-    // count means pairs that would otherwise have been reported, and counted,
-    // because a silently shorter list is the same failure one step quieter.
-    if (!live.has(a) || !live.has(b)) { dropped++; continue; }
     pairs.push({ a, b, total, base, share: total / base, profile: v });
   }
   pairs.sort((x, y) => y.share - x.share);
-  return { pairs, capped, dropped };
+  return { pairs, capped };
 }
 
 // ── Manifests — exact, declared rather than inferred ─────────────────────────
@@ -698,13 +687,12 @@ function readAll(abs) {
 // A record, not a report: this returns plain data and prints nothing, and the
 // version it carries is what lets a later reader refuse a file whose shape it
 // does not know.
-function snapshot({ version, at, since, files, dirs, spans }) {
+const SNAPSHOT_SCHEMA = 1;
+
+function snapshot({ version, files, dirs, spans }) {
   return {
+    schema: SNAPSHOT_SCHEMA,
     version,
-    // Omitted rather than nulled where git cannot say: a field that is present
-    // and empty reads as a repository with no commit.
-    ...(at ? { at } : {}),
-    since,
     files: files.length,
     dirs: Object.fromEntries([...dirs.values()].map((d) => [d.path || ".", { files: d.files, lines: d.lines }])),
     // Only the measured ones. A span that could not be measured has no edges,
@@ -717,4 +705,4 @@ function snapshot({ version, at, since, files, dirs, spans }) {
   };
 }
 
-export { inventory, history, CHARS_PER_TOKEN, proseTokens, manifests, submodulePaths, byDirectory, testConvention, scatter, snapshot, median, pct, day, num, count, maxOf, tokens, tryGit, CO_FLOOR, CO_SUPPORT };
+export { inventory, history, CHARS_PER_TOKEN, proseTokens, manifests, submodulePaths, byDirectory, testConvention, scatter, snapshot, SNAPSHOT_SCHEMA, median, pct, day, num, count, maxOf, tokens, tryGit, CO_FLOOR, CO_SUPPORT };

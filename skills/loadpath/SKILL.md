@@ -32,7 +32,13 @@ node scripts/loadpath.mjs [REPO] --snapshot F   also record this scan's layout a
 node scripts/loadpath.mjs [REPO] --compare F    only what moved since that snapshot
 ```
 
-`--since 12.months` sets the history window, `--budget 1600` the structure table's token allowance. Requires Node 18+ and nothing else.
+`--since 12.months` sets the history window, `--budget 1600` the structure table's token allowance. The command requires Node 18+; dependency coverage has the additional requirements below.
+
+## Capability and language coverage
+
+- **Inventory, distributions, scatter and current-file history** recognise Go, Python, JavaScript/TypeScript, Vue/Svelte, Rust, Java/Kotlin/Scala, Ruby, PHP, C#, Swift/Objective-C/C/C++, Elixir, Clojure, Haskell, OCaml, Solidity, Zig, Dart, Lua, Perl, R and Julia source extensions. These measurements are language-independent; shell, SQL, protobuf and Terraform files are not in this source population. Relocations deliberately remain wider and count every renamed file type.
+- **Dependency spans** are implemented only for Go (`go list`, Go on `PATH`, warm module cache), C# (`ProjectReference`, built in), Python (`python3` plus `grimp`) and Node/TypeScript (`madge@8.0.0` from the warm offline `npx` cache). Go searches for modules four levels below its analyzer root; C# searches twelve; both disclose directories below that depth. Node measures every existing `src`, `lib`, `packages`, `apps`, `app` and `web` root at the declared module root.
+- **Other declared ecosystems** still receive the exact structure and history measurements, but their dependency span says **not measured**. Do not translate that into zero edges. Snapshot and compare record only measured spans, alongside file and directory layout.
 
 ## Reading the output
 
@@ -47,7 +53,7 @@ node scripts/loadpath.mjs [REPO] --compare F    only what moved since that snaps
 - **declared modules** — what the manifests say this repository builds, which is also what decides which analyzer runs. The ones the filters refused are counted with their reason — copies sharing one package name, a file declaring no module of its own, a scaffold or fixture path — because three real modules under three hundred manifests is a normal shape and not a failure to look.
 - **dependencies** — one **span** per ecosystem the repository declares, each measured by that ecosystem's own analyzer, named in the output. Spans stand side by side and are never added together: a Go package and a TypeScript file directory are not the same unit. An ecosystem that cannot be measured here says so and says why. Where that reason names a remedy — a toolchain to install, a cache to warm — put the command to the user for approval rather than running it, because a read must not change the machine; carry on with the exact measurements meanwhile, and raise it only when the task rests on the dependency graph. Entanglement is reported as **groups**: inside a group nothing can be built, tested, or replaced alone. Layer depth is how far weight travels before it reaches something that depends on nothing, and a node listed for its fan-out also carries how many of that graph's nodes it reaches transitively — which is what a change to it arrives at.
 
-**No list here stops without saying so.** Every capped list ends with what it did not show, and every refusal is counted on the page: files carrying a source extension with no line count, history records that did not parse, manifests the filters dropped, pairs naming a directory the tree no longer has. A short list is short because the repository is, not because the page ran out of room — so read a missing `+N more` as the claim it is.
+**No list here stops without saying so.** Every capped list ends with what it did not show, and every refusal is counted on the page: files carrying a source extension with no line count, history records that did not parse, manifests the filters dropped, and directories below an analyzer's search depth. A short list is short because the repository is, not because the page ran out of room — so read a missing `+N more` as the claim it is.
 
 **Done reading when** every emitted section has produced either a lead you will follow or an explicit "nothing here", and you have said which.
 

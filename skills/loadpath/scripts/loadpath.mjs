@@ -10,7 +10,7 @@
 import { existsSync, statSync, realpathSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { inventory, history, manifests, submodulePaths, byDirectory, testConvention, scatter, snapshot, tryGit, tokens, CHARS_PER_TOKEN } from "./scan.mjs";
+import { inventory, history, manifests, submodulePaths, byDirectory, testConvention, scatter, snapshot, SNAPSHOT_SCHEMA, tryGit, tokens, CHARS_PER_TOKEN } from "./scan.mjs";
 import { renderL0, renderL1, renderL2, renderCoChange, renderRelocations, renderDepsDetail, renderCompare } from "./report.mjs";
 import { dependencies } from "./deps.mjs";
 
@@ -18,7 +18,7 @@ import { dependencies } from "./deps.mjs";
 // does not travel with the installed skill. Without this constant an installed
 // copy cannot say what it is, and output pasted into an issue carries no
 // provenance. tests/contract.mjs holds it equal to package.json.
-const VERSION = "0.3.0";
+const VERSION = "0.3.1";
 
 // What the command line said, and what this tool did with it. Every departure
 // between the two is carried out of here rather than made quietly: a flag it
@@ -96,10 +96,14 @@ function parse(argv) {
   // which reads as a scan of something it never opened.
   if (rest.length > 1) fail(`${rest.length} repositories were given (${rest.join(", ")}); this reads one`);
   if (rest.length) o.repo = rest[0];
-  // --dir answers a different question and stops, so these three never reach
-  // the page. They were accepted and dropped in silence.
-  if (o.dir) {
-    const ignored = ["--structure", "--budget", "--top"].filter((f) => asked.has(f));
+  // Each terminal view names the accepted flags it cannot use. Compare takes
+  // precedence when both are present: it does not become a subtree view merely
+  // because --dir was typed beside it.
+  if (o.compare !== null) {
+    const ignored = ["--since", "--windows", "--cap", "--top", "--dir", "--structure", "--budget"].filter((f) => asked.has(f));
+    if (ignored.length) o.notices.push(`--compare prints only the recorded delta, so ${ignored.join(", ")} ${ignored.length === 1 ? "has" : "have"} no effect here`);
+  } else if (o.dir) {
+    const ignored = ["--structure", "--budget", "--windows", "--cap", "--top"].filter((f) => asked.has(f));
     if (ignored.length) o.notices.push(`--dir prints one subtree and stops, so ${ignored.join(", ")} ${ignored.length === 1 ? "has" : "have"} no effect here`);
   }
   return o;
@@ -138,9 +142,9 @@ function refuse(why) {
   process.exit(1);
 }
 
-// What --compare expects, checked before anything is compared against it. A
-// file whose version is missing is not a snapshot this tool wrote, and reading
-// its fields anyway would silently compare against zeros.
+// What --compare expects, checked before anything is compared against it. This
+// is a closed record: accepting a partial or future shape would turn absent
+// facts into zeros, or let rendering fail with an implementation stack trace.
 function readSnapshot(file) {
   let raw;
   try { raw = readFileSync(file, "utf8"); }
@@ -148,13 +152,20 @@ function readSnapshot(file) {
   let j;
   try { j = JSON.parse(raw); }
   catch { refuse(`${file} is not JSON; --compare expects a file written by --snapshot`); }
-  if (!j || typeof j !== "object" || typeof j.version !== "string") {
-    refuse(`${file} carries no version field, so it is not a loadpath snapshot; --compare expects a file written by --snapshot`);
-  }
-  // Shape, not just presence: a field of the wrong type would raise inside the
-  // comparison, and a stack trace is a worse answer than a sentence.
-  if (!j.dirs || typeof j.dirs !== "object" || !Array.isArray(j.spans)) {
-    refuse(`${file} carries no layout or no spans; --compare expects a file written by --snapshot`);
+  const object = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
+  const natural = (x) => Number.isInteger(x) && x >= 0;
+  const exact = (x, keys) => object(x) && Object.keys(x).sort().join("\0") === [...keys].sort().join("\0");
+  const dir = (d) => exact(d, ["files", "lines"]) && natural(d.files) && natural(d.lines);
+  const group = (g) => Array.isArray(g) && g.length >= 2 && g.every((n) => typeof n === "string" && n.length > 0);
+  const span = (s) => exact(s, ["eco", "unit", "edges", "nodes", "layers", "groups"]) &&
+    typeof s.eco === "string" && s.eco.length > 0 && typeof s.unit === "string" && s.unit.length > 0 &&
+    natural(s.edges) && natural(s.nodes) && natural(s.layers) && Array.isArray(s.groups) && s.groups.every(group);
+  const valid = exact(j, ["schema", "version", "files", "dirs", "spans"]) &&
+    j.schema === SNAPSHOT_SCHEMA && typeof j.version === "string" && j.version.length > 0 && natural(j.files) &&
+    object(j.dirs) && Object.values(j.dirs).every(dir) && Array.isArray(j.spans) && j.spans.every(span) &&
+    new Set(j.spans.map((s) => s.eco)).size === j.spans.length;
+  if (!valid) {
+    refuse(`${file} does not match loadpath snapshot schema ${SNAPSHOT_SCHEMA}; --compare accepts only the exact shape written by this version's --snapshot`);
   }
   return j;
 }
@@ -206,13 +217,6 @@ function main() {
   }
   const conv = testConvention(files);
   const dirs = byDirectory(files, conv.isTest);
-  const hist = history(root, {
-    since: o.since, windows: o.windows, breadthCap: o.cap, prefix,
-    // The same submodule set the walk used, and the tree it found. Both halves
-    // of the page owe the reader one population, and only the walk knows which
-    // directories a reader can still open.
-    submodules, live: new Set(dirs.keys()),
-  });
   // A subtree inside a module still belongs to that module, so the manifest
   // above the scope is kept beside the ones inside it. Both are what the
   // reader is told is declared, and both are what the analyzers are rooted at.
@@ -231,12 +235,9 @@ function main() {
   // a Node frontend report that no analyzer applied to either. The subtree is
   // a second question asked of the same graph, so naming one does not change
   // what is measured — only what is also reported.
-  const subtree = o.dir ? o.dir.replace(/\/$/, "") : "";
+  const subtree = !o.compare && o.dir ? o.dir.replace(/\/$/, "") : "";
   const spans = dependencies(root, { files, mans, prefix, subtree });
-  const head = tryGit(root, ["rev-parse", "HEAD"]);
-  const record = () => snapshot({
-    version: VERSION, at: head.ok ? head.out.trim() : "", since: o.since, files, dirs, spans,
-  });
+  const record = () => snapshot({ version: VERSION, files, dirs, spans });
 
   let text;
   if (o.compare) {
@@ -244,38 +245,46 @@ function main() {
     // where the snapshot came from — and reprinting it would bury the lines
     // they came back for.
     text = renderCompare(readSnapshot(o.compare), record());
-  } else if (o.dir) {
-    text = renderL2({ files, conv, hist, spans, prefix: subtree });
   } else {
-    const parts = [];
-    parts.push(root + (prefix ? "/" + prefix : ""));
-    if (scopeNote) parts.push(scopeNote);
-    parts.push("");
-    // The whole result, not a pre-rendered line: the entry point does not format.
-    parts.push(renderL0({ files, dirs, conv, hist, mans, filtered, noise, spans, scattered: scatter(files), since: o.since }));
-
-    const reloc = renderRelocations(hist);
-    if (reloc) { parts.push(""); parts.push(reloc); }
-
-    parts.push("");
-    parts.push(renderCoChange(hist, o.top));
-
-    if (o.structure) {
+    const hist = history(root, {
+      since: o.since, windows: o.windows, breadthCap: o.cap, prefix,
+      // The same submodule set and exact file population the walk used. Both
+      // halves of the page owe the reader one population.
+      submodules, live: new Set(dirs.keys()), liveFiles: new Set(files.map((f) => f.path)),
+    });
+    if (o.dir) {
+      text = renderL2({ files, conv, hist, spans, prefix: subtree });
+    } else {
+      const parts = [];
+      parts.push(root + (prefix ? "/" + prefix : ""));
+      if (scopeNote) parts.push(scopeNote);
       parts.push("");
-      // The section's own header comes back with it: whether the budget trimmed
-      // the table is the renderer's fact, and the promise printed here was made
-      // by a file that could not know whether it was kept.
-      parts.push(renderL1({ dirs, hist, spans, budget: o.budget }));
-      // Each span's header line already appeared in L0; only the detail is new.
-      const detail = renderDepsDetail(spans);
-      if (detail) { parts.push(""); parts.push(detail); }
-    }
+      // The whole result, not a pre-rendered line: the entry point does not format.
+      parts.push(renderL0({ files, dirs, conv, hist, mans, filtered, noise, spans, scattered: scatter(files), since: o.since }));
 
-    parts.push("");
-    parts.push("next        --structure for every directory and the entangled groups");
-    parts.push("            --dir PATH for one subtree, file by file");
-    parts.push("            then read the code. These are leads, not findings.");
-    text = parts.join("\n");
+      const reloc = renderRelocations(hist);
+      if (reloc) { parts.push(""); parts.push(reloc); }
+
+      parts.push("");
+      parts.push(renderCoChange(hist, o.top));
+
+      if (o.structure) {
+        parts.push("");
+        // The section's own header comes back with it: whether the budget trimmed
+        // the table is the renderer's fact, and the promise printed here was made
+        // by a file that could not know whether it was kept.
+        parts.push(renderL1({ dirs, hist, spans, budget: o.budget }));
+        // Each span's header line already appeared in L0; only the detail is new.
+        const detail = renderDepsDetail(spans);
+        if (detail) { parts.push(""); parts.push(detail); }
+      }
+
+      parts.push("");
+      parts.push("next        --structure for every directory and the entangled groups");
+      parts.push("            --dir PATH for one subtree, file by file");
+      parts.push("            then read the code. These are leads, not findings.");
+      text = parts.join("\n");
+    }
   }
   console.log(text);
   // Written after the view, and to the path the reader named. Where it lands

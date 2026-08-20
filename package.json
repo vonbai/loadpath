@@ -1,6 +1,6 @@
 {
   "name": "loadpath-skill",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "An Agent Skill that reads how a codebase carries its weight: placement, dependency direction, structural drift, and load-bearing paths.",
   "license": "MIT",

@@ -116,7 +116,7 @@ const ADR_EVIDENCE = {
   // Nothing else holds history out of the record — a suite can assert what a
   // snapshot contains, not what it must never contain — so this is where a
   // `hist` added to that signature would be caught.
-  "0014": /function snapshot\(\{ version, at, since, files, dirs, spans \}\)/,
+  "0014": /function snapshot\(\{ version, files, dirs, spans \}\)/,
 };
 for (const f of readdirSync(join(ROOT, "docs", "adr"))) {
   const n = f.slice(0, 4);
@@ -235,7 +235,6 @@ for (const m of new Set([...text.matchAll(/`(--[a-z]+)[^`]*`/g)].map((x) => x[1]
   // when the code they cite moves.
   const NOT_A_LIST = {
     "names.slice(0, 3)": "the count is printed beside the ellipsis, so the line already says what it dropped",
-    "s.at.slice(0, 7)": "a commit id shortened to seven characters: a string, not a list",
   };
   // Measured against this file: the widest real gap is the largest-directories
   // block, where the rows themselves are printed between the slice and its
@@ -297,7 +296,7 @@ for (const m of new Set([...text.matchAll(/`(--[a-z]+)[^`]*`/g)].map((x) => x[1]
       ["single-author column drop", "report.mjs",   /topShare === 1 && e\.majorAuthors === 1/,          "top author holds every one of its commits"],
       ["reach ceiling",             "deps.mjs",     /const REACH_CEILING = 20000;/,                     "below 20,000 components"],
       ["busiest counterparts",      "deps.mjs",     /const TOP = 5;/,                                   "5 busiest counterpart directories"],
-      ["Go module walk depth",      "deps.mjs",     /if \(d > 4\) return;/,                             "descends 4 directories below the root"],
+      ["Go module walk depth",      "deps.mjs",     /const GO_MODULE_DEPTH = 4;/,                       "descends 4 directories below the root"],
       ["csproj walk depth",         "deps.mjs",     /const CSPROJ_DEPTH = 12;/,                         ".csproj walk 12"],
     ];
     const cache = new Map();

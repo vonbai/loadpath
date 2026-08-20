@@ -66,10 +66,13 @@ const OFFLINE = { GOPROXY: "off", GOFLAGS: "" };
 // drops the rest: on one real repository that was 290 packages of 420. Each
 // module is analysed where it lives, and its package paths are rebased onto the
 // repository so every node in the merged graph is one repo-relative directory.
+const GO_MODULE_DEPTH = 4;
+
 function goModules(root) {
   const mods = [];
+  let unsearched = 0;
   const walk = (abs, d) => {
-    if (d > 4) return;
+    if (d > GO_MODULE_DEPTH) { unsearched++; return; }
     if (existsSync(join(abs, "go.mod"))) mods.push(abs);
     let es; try { es = readdirSync(abs, { withFileTypes: true }); } catch { return; }
     for (const e of es) {
@@ -79,11 +82,11 @@ function goModules(root) {
     }
   };
   walk(root, 0);
-  return mods;
+  return { mods, unsearched };
 }
 
 function goAnalyzer(root) {
-  const mods = goModules(root);
+  const { mods, unsearched } = goModules(root);
   if (!mods.length) return null;
   // A toolchain that is not installed is not the absence of a Go repository,
   // and returning the same null for both said the second about the first. The
@@ -110,7 +113,8 @@ function goAnalyzer(root) {
   // not one, and putting it there would empty the gate's denominator and make
   // every multi-module repository pass unchecked.
   const note = reached < mods.length ? `${reached} of ${mods.length} modules resolved` : "";
-  return { provenance: versioned("go list -e -mod=readonly", version), edges, nodes, unit: "package", unitPlural: "packages", scope: "", note };
+  return { provenance: versioned("go list -e -mod=readonly", version), edges, nodes, unit: "package", unitPlural: "packages", scope: "", note,
+           unsearched, searchDepth: GO_MODULE_DEPTH, searchFor: "Go modules" };
 }
 
 // One module, rebased onto `at` — the module's directory relative to the repo.
@@ -129,6 +133,7 @@ function goModule(root, at) {
   if (!r.ok) return { why: explain(r.err) };
   const edges = new Set(); const nodes = new Set();
   const rebase = (p) => (at ? (p === "." ? at : at + "/" + p) : p);
+  const internal = (p) => p === prefix || p.startsWith(prefix + "/");
   // A concatenated JSON stream, not an array.
   let i = 0, s = r.out;
   while (i < s.length) {
@@ -144,11 +149,11 @@ function goModule(root, at) {
     }
     let o; try { o = JSON.parse(s.slice(start, i)); } catch { continue; }
     const ip = o.ImportPath || "";
-    if (!ip.startsWith(prefix)) continue;
+    if (!internal(ip)) continue;
     const src = rebase(ip.slice(prefix.length).replace(/^\//, "") || ".");
     nodes.add(src);
     for (const imp of o.Imports || []) {
-      if (!imp.startsWith(prefix)) continue;
+      if (!internal(imp)) continue;
       const dst = rebase(imp.slice(prefix.length).replace(/^\//, "") || ".");
       if (dst !== src) { edges.add(src + "\0" + dst); nodes.add(dst); }
     }
@@ -172,6 +177,41 @@ function goModule(root, at) {
 // sentence a reader sees is still Report's job.
 const CSPROJ_DEPTH = 12;
 
+// Only start tags carry references. Reading the tag boundary with its quote
+// state keeps `>` inside an attribute from ending it, and skipping comments
+// keeps a disabled ProjectReference from becoming an edge. Attribute order and
+// quote style are XML choices, not graph choices, so neither is constrained.
+function projectReferences(xml) {
+  const out = [];
+  const entity = (s) => s.replace(/&(amp|quot|apos|lt|gt|#\d+|#x[\da-f]+);/gi, (all, one) => {
+    const named = { amp: "&", quot: '"', apos: "'", lt: "<", gt: ">" };
+    const key = one.toLowerCase();
+    if (key in named) return named[key];
+    const n = key.startsWith("#x") ? Number.parseInt(key.slice(2), 16) : Number.parseInt(key.slice(1), 10);
+    return Number.isFinite(n) ? String.fromCodePoint(n) : all;
+  });
+  let at = 0;
+  while ((at = xml.indexOf("<", at)) >= 0) {
+    if (xml.startsWith("<!--", at)) { const end = xml.indexOf("-->", at + 4); at = end < 0 ? xml.length : end + 3; continue; }
+    if (xml.startsWith("<![CDATA[", at)) { const end = xml.indexOf("]]>", at + 9); at = end < 0 ? xml.length : end + 3; continue; }
+    if (xml.startsWith("<?", at)) { const end = xml.indexOf("?>", at + 2); at = end < 0 ? xml.length : end + 2; continue; }
+    let end = at + 1, quote = "";
+    for (; end < xml.length; end++) {
+      const c = xml[end];
+      if (quote) { if (c === quote) quote = ""; continue; }
+      if (c === '"' || c === "'") quote = c;
+      else if (c === ">") break;
+    }
+    const tag = xml.slice(at + 1, end);
+    at = Math.min(end + 1, xml.length);
+    const name = /^\s*([^\s/>]+)/.exec(tag)?.[1]?.split(":").pop();
+    if (name?.toLowerCase() !== "projectreference") continue;
+    const include = /\bInclude\s*=\s*(["'])([\s\S]*?)\1/i.exec(tag);
+    if (include) out.push(entity(include[2]));
+  }
+  return out;
+}
+
 function csprojAnalyzer(root) {
   const projects = [];
   let unsearched = 0;
@@ -190,8 +230,8 @@ function csprojAnalyzer(root) {
     const from = relative(root, dirname(p)).split(sep).join("/") || ".";
     nodes.add(from);
     let xml = ""; try { xml = readFileSync(p, "utf8"); } catch { continue; }
-    for (const m of xml.matchAll(/<ProjectReference\s+Include\s*=\s*"([^"]+)"/gi)) {
-      const target = relative(root, join(dirname(p), m[1].replace(/\\/g, "/"))).split(sep).join("/");
+    for (const ref of projectReferences(xml)) {
+      const target = relative(root, join(dirname(p), ref.replace(/\\/g, "/"))).split(sep).join("/");
       const to = dirname(target) || ".";
       if (to !== from) { edges.add(from + "\0" + to); nodes.add(to); }
     }
@@ -268,16 +308,16 @@ const MADGE_PROVENANCE = `madge ${MADGE_VERSION}`;
 
 function nodeAnalyzer(root) {
   if (!existsSync(join(root, "package.json"))) return null;
-  const srcDir = ["src", "lib", "packages", "app"].find((d) => existsSync(join(root, d)));
+  const srcDirs = ["src", "lib", "packages", "apps", "app", "web"].filter((d) => existsSync(join(root, d)));
   // Present and unreadable is a different fact from not present: madge is
   // pointed at a directory, and there is none here to point it at. The sentence
   // states the file and the missing directory rather than calling the file a
   // declaration — whether a package.json declares a module is the manifest
   // scan's judgement, and it is made elsewhere.
-  if (!srcDir) return { absent: "a package.json sits here with none of src/, lib/, packages/ or app/ beside it for madge to read" };
+  if (!srcDirs.length) return { absent: "a package.json sits here with none of src/, lib/, packages/, apps/, app/ or web/ beside it for madge to read" };
   const args = ["--yes", "--offline", MADGE, "--json", "--extensions", "ts,tsx,js,jsx,mjs"];
   if (existsSync(join(root, "tsconfig.json"))) args.push("--ts-config", "./tsconfig.json");
-  args.push(srcDir);
+  args.push(...srcDirs);
   // madge exits without draining its stdout pipe, so anything past 64 KiB is
   // lost and the JSON no longer parses — which is every real TypeScript
   // project. Redirect to a file and read it back.
@@ -291,12 +331,17 @@ function nodeAnalyzer(root) {
   const keys = Object.keys(j);
   if (!keys.length) return { provenance: MADGE_PROVENANCE, edges: null, why: "madge returned an empty graph; treat as not measured, not as no dependencies" };
   const edges = new Set(); const nodes = new Set();
-  const toDir = (p) => { const d = dirname(join(srcDir, p)); return d === "." ? srcDir : d; };
+  // With one input madge names files relative to that input; with several it
+  // names them relative to cwd. Normalise both shapes to analyzer-root paths.
+  const toDir = (p) => {
+    const d = dirname(srcDirs.length === 1 ? join(srcDirs[0], p) : p);
+    return d === "." ? srcDirs[0] : d;
+  };
   for (const [from, tos] of Object.entries(j)) {
     const a = toDir(from); nodes.add(a);
     for (const t of tos) { const b = toDir(t); nodes.add(b); if (a !== b) edges.add(a + "\0" + b); }
   }
-  return { provenance: MADGE_PROVENANCE, edges, nodes, unit: "file directory", unitPlural: "file directories", scope: srcDir };
+  return { provenance: MADGE_PROVENANCE, edges, nodes, unit: "file directory", unitPlural: "file directories", scopes: srcDirs };
 }
 
 // ── Ecosystem families ───────────────────────────────────────────────────────
@@ -571,10 +616,11 @@ function span(root, fam, { files, prefix, subtree }) {
   // Coverage against what the analyzer was pointed at. Judging madge on
   // `src/` by the size of a tree that also holds tests, docs and tooling
   // would reject a correct graph for looking at the thing it was given.
-  const scope = [at, r.scope].filter(Boolean).join("/");
-  const inScope = files.filter((f) => !scope || f.dir === scope || f.dir.startsWith(scope + "/"));
+  const scopes = (r.scopes ?? [r.scope ?? ""]).map((one) => [at, one].filter(Boolean).join("/"));
+  const inScope = files.filter((f) => scopes.some((one) => !one || f.dir === one || f.dir.startsWith(one + "/")));
   const dirCount = new Set(inScope.map((f) => f.dir)).size;
-  const where = scope ? `${scope}/` : "the tree";
+  const scope = scopes.length === 1 ? scopes[0] : at;
+  const where = scopes.filter(Boolean).length ? scopes.map((one) => `${one}/`).join(" and ") : "the tree";
   if (r.edges.size === 0) return notMeasured(fam.eco, `${r.provenance} resolved no edges over ${count(dirCount, "directory", "directories")} in ${where}; treat as not measured, not as no dependencies`);
   // Proportional, not a constant. A graph covering a twentieth of the tree
   // is not a small graph, it is a failed one — and a fixed floor of three
@@ -629,7 +675,7 @@ function span(root, fam, { files, prefix, subtree }) {
   return { eco: fam.eco, measured: true, provenance: r.provenance, unit: r.unit, unitPlural,
            note: r.note || "", scope, out, nodes: kept, edges: within.size, tangles, depth, fanIn, fanOut, layerOf, groupOf,
            reach, reachWhy, crossings: prefix ? crossings : null, load,
-           unsearched: r.unsearched || 0, searchDepth: r.searchDepth || 0 };
+           unsearched: r.unsearched || 0, searchDepth: r.searchDepth || 0, searchFor: r.searchFor || unitPlural };
 }
 
 // A reason is data, exactly as History's `unavailable` is. Composing the

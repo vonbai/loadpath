@@ -26,11 +26,10 @@ permissions:
 jobs:
   acceptance:
     runs-on: ubuntu-latest
-    # The mutation leg sets this, not the other two: 82 exercised mutants, each
-    # a full acceptance run measured at 15 s. Six lanes on an 18-way machine run
-    # them in 4.6 minutes; one lane is that 15 s times 82, or 21 minutes. A
-    # hosted runner takes fewer lanes and a slower suite in each, so the ceiling
-    # sits well above the measurement rather than just above it.
+    # The mutation leg sets this, not the other two: every exercised mutant is
+    # a full acceptance run. The harness uses bounded parallel lanes, while a
+    # hosted runner may expose fewer CPUs and a colder cache, so the ceiling
+    # sits well above the measured local run rather than just above it.
     timeout-minutes: 45
     strategy:
       fail-fast: false

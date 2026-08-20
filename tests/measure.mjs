@@ -140,9 +140,16 @@ for (const c of CORPUS) {
   // their figures are never summed: a packages count plus a file-directories
   // count is a number with no unit. So a corpus with labelled spans records a
   // spans array and no single edges/layers/analyzer at all.
-  const spanBlocks = [...out.matchAll(
-    /^dependencies \(([^)]+)\)\s+([\d,]+) edges? over [\d,]+ [^,]+, via ([^\n]+)\n\s+load path is (\d+) layers? deep; (?:no mutually entangled group|([\d,]+) mutually entangled)/gm,
-  )].map((m) => ({ eco: m[1], edges: Number(m[2].replace(/,/g, "")), layers: Number(m[4]), entangled: m[5] ? Number(m[5].replace(/,/g, "")) : 0, analyzer: m[3] }));
+  const heads = [...out.matchAll(/^dependencies \(([^)]+)\)\s+([\d,]+) edges? over [\d,]+ [^,]+, via ([^\n]+)$/gm)];
+  const spanBlocks = heads.map((m, i) => {
+    // Qualifiers belong inside their span and may grow independently: a depth
+    // disclosure now sits between the Go headline and load-path line. Slice by
+    // the next span headline instead of coupling the parser to a fixed row gap.
+    const block = out.slice(m.index + m[0].length, heads[i + 1]?.index ?? out.length);
+    const shape = /load path is (\d+) layers? deep; (?:no mutually entangled group|([\d,]+) mutually entangled)/.exec(block);
+    return { eco: m[1], edges: Number(m[2].replace(/,/g, "")), layers: Number(shape?.[1] ?? -1),
+      entangled: shape?.[2] ? Number(shape[2].replace(/,/g, "")) : 0, analyzer: m[3] };
+  });
   const r = {
     corpus: c.name,
     sha: c.sha.slice(0, 12),

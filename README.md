@@ -40,23 +40,23 @@ Loadpath does not parse imports. It runs the ecosystem's own analyzer and names 
 
 | Ecosystem | Analyzer | Granularity | Needs |
 |---|---|---|---|
-| Go | `go list -e -mod=readonly`, every module | package = directory | `go` on PATH, warm module cache |
+| Go | `go list -e -mod=readonly`, modules through depth 4 | package = directory | `go` on PATH, warm module cache |
 | C# | `.csproj` `<ProjectReference>` | project | nothing |
 | Python | `grimp` | module directory | `pip install grimp` |
-| Node/TS | `madge@8.0.0`, pinned | file directory | a warm npx cache |
+| Node/TS | `madge@8.0.0`, every existing `src/lib/packages/apps/app/web` root | file directory | a warm npx cache |
 | anything else | — | — | named as an absence, never omitted |
 
 Calling a real analyzer is not the same as trusting it: the dominant failure mode of the Node tools is silent empty output, so every result passes a sanity check before it is believed, and a failed check reports Not measured rather than zero.
 
 ## Install
 
-Requires Node 18 or newer. No dependencies.
+Requires Node 18 or newer. Filesystem and history measurements need nothing else; dependency spans have the analyzer requirements above.
 
 ```bash
-npx --yes skills add vonbai/loadpath@v0.3.0 --global
+npx --yes skills add vonbai/loadpath@v0.3.1 --global
 ```
 
-The unpinned form, `vonbai/loadpath`, tracks `main`: every change there has passed the four suites below on a developer machine, but only a release-tagged state has run them across Node 18, 22 and 24 on Linux with a cold analyzer cache.
+The unpinned form, `vonbai/loadpath`, tracks `main`: every change there has passed the single local `npm test` gate below, but only a release-tagged state has run mutation analysis and the suite across Node 18, 22 and 24 on Linux with a cold analyzer cache.
 
 `node ~/.agents/skills/loadpath/scripts/loadpath.mjs --version` says what an installed copy actually is. Update with `npx --yes skills update loadpath --global`; remove with `npx --yes skills remove loadpath --global`.
 
@@ -70,8 +70,8 @@ node ~/.agents/skills/loadpath/scripts/loadpath.mjs /path/to/repo
 
 Everything published here is recomputed by the repository itself. There is **one gate**: `npm test` — acceptance, contract and measurement, about half a minute — and a change passes it before it lands. The deep questions (is the suite itself alive, does this hold on other platforms and Node versions, on a cold cache) are asked once per release, remotely, by the tag-triggered battery; a mutation survivor there stops the release, not your afternoon.
 
-- `node --test tests/loadpath.test.mjs` — 129 acceptance tests over synthetic repositories built per case.
-- `node tests/mutate.mjs` — 115 one-line feature deletions; **a surviving mutant fails the build.** v0.1.0's suite let 14 of 20 pass, including the line that broke its own headline claim. Three are marked *equivalent* — a second guard already produces the same observable, so they are asserted to survive and a kill means the stated proof went stale — and five are listed every run as *not exercised*, with the toolchain each would need. The number is never the claim; the list is.
+- `node --test tests/loadpath.test.mjs` — 138 acceptance tests over synthetic repositories built per case.
+- `node tests/mutate.mjs` — 120 one-line feature deletions; **a surviving mutant fails the release.** v0.1.0's suite let 14 of 20 pass, including the line that broke its own headline claim. Three are marked *equivalent* — a second guard already produces the same observable, so they are asserted to survive and a kill means the stated proof went stale — and five are listed every run as *not exercised*, with the toolchain each would need. The number is never the claim; the list is.
 - `node tests/measure.mjs` — every published figure recomputed from four pinned public repositories, one of them a Go+TypeScript monorepo that holds the span contract to real bytes, and compared against `tests/measure-baseline.json`. A pin that does not resolve fails the run.
 - `node tests/contract.mjs` — the skill's frontmatter, budget, pointers and vocabulary.
 

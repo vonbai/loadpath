@@ -164,18 +164,21 @@ export function renderL0({ files, dirs, conv, hist, mans, filtered = [], noise =
 // rows survive, after Aider's repo map, rather than a hardcoded top-N.
 
 export function renderL1({ dirs, hist, spans, budget }) {
-  // The spans' node sets are disjoint — each ecosystem's analyzer sees its own
-  // directories — so one layer column carries all of them, with the group
-  // numbers taken from the page rather than from any one span.
   const groups = entangledGroups(spans);
-  const layerOf = new Map();
-  for (const s of spans) if (s.measured) for (const [n, l] of s.layerOf) layerOf.set(n, l);
+  const measured = spans.filter((s) => s.measured);
+  const layersOf = new Map();
+  for (const s of measured) {
+    for (const [n, layer] of s.layerOf) {
+      if (!layersOf.has(n)) layersOf.set(n, []);
+      layersOf.get(n).push({ eco: s.eco, layer, group: groups.get(s)?.get(n) });
+    }
+  }
   // Two columns exist only when they can carry a figure: the share where more
   // than one author holds the commits, the layer where some analyzer answered.
   // A column of one repeated value, or of nothing at all, is width every row
   // pays for and no row uses.
   const share = !singleAuthor(hist);
-  const layered = layerOf.size > 0;
+  const layered = layersOf.size > 0;
 
   const names = ["files", "lines", "tests", hist.available ? "commits" : "?"];
   if (share) names.push(hist.available ? "share/a" : "?");
@@ -184,8 +187,7 @@ export function renderL1({ dirs, hist, spans, budget }) {
 
   const rows = [...dirs.values()].map((d) => {
     const h = hist.available ? hist.dirs.get(d.path) : null;
-    const grp = layerOf.has(d.path)
-      ? { layer: layerOf.get(d.path), group: groups.get(d.path) } : null;
+    const layers = layersOf.get(d.path) ?? [];
     const cells = [
       `${d.files}f`,
       `${num(d.lines)}L`,
@@ -197,7 +199,9 @@ export function renderL1({ dirs, hist, spans, budget }) {
     ];
     if (share) cells.push(hist.available ? (h ? `${Math.round(h.topShare * 100)}%/${h.majorAuthors}a` : "-") : "?");
     cells.push(hist.available ? (h ? day(h.last) : "-") : "?");
-    if (layered) cells.push(grp ? `L${grp.layer}${grp.group ? " g" + grp.group : ""}` : "-");
+    if (layered) cells.push(layers.length
+      ? layers.map((one) => `${measured.length > 1 ? one.eco + ":" : ""}L${one.layer}${one.group ? " g" + one.group : ""}`).join(" · ")
+      : "-");
     return { path: d.path || ".", mass: d.lines, cells };
   }).sort((a, b) => b.mass - a.mass);
 
@@ -252,7 +256,6 @@ export function renderCoChange(hist, top) {
   const floor = `${CO_FLOOR} votes over ${count(CO_SUPPORT, "commit")}`;
   out.push(`co-change   ${count(hist.commits.length, "commit")}, median ${count(median(breadths), "directory", "directories")} each, ${count(hist.windows, "equal time window")}`);
   if (hist.capped) out.push(`            ${count(hist.capped, "commit")} touched more than the breadth cap and ${hist.capped === 1 ? "was" : "were"} excluded as sweeps`);
-  if (hist.dropped) out.push(`            ${count(hist.dropped, "pair")} named a directory the tree no longer has and ${hist.dropped === 1 ? "was" : "were"} dropped`);
   // The floor travels with the sentence about it, in both directions: a reader
   // who sees nothing needs to know what nothing means here, and a reader who
   // sees rows needs to know what the rows had to clear. It was a literal in
@@ -394,7 +397,7 @@ function renderSpan(d, label) {
   // of the two.
   if (d.unsearched) {
     const [were, them] = d.unsearched === 1 ? ["was", "it"] : ["were", "them"];
-    out.push(`${pad}${count(d.unsearched, "directory", "directories")} sat deeper than the ${d.searchDepth} levels this walk descends and ${were} not searched for ${d.unitPlural}, nor anything under ${them}`);
+    out.push(`${pad}${count(d.unsearched, "directory", "directories")} sat deeper than the ${d.searchDepth} levels this walk descends and ${were} not searched for ${d.searchFor}, nor anything under ${them}`);
   }
   // Once, here. The detail below used to repeat it in other words two lines
   // later — "0 mutually entangled group(s)" and then "no group found" — and a
@@ -428,10 +431,13 @@ function renderCrossings(c) {
 // their own tangles from one would print two g1 rows in a table where a reader
 // cannot tell them apart.
 function entangledGroups(spans) {
-  const all = spans.filter((s) => s.measured).flatMap((s) => s.tangles);
-  all.sort((a, b) => b.length - a.length);
+  const all = spans.filter((s) => s.measured).flatMap((span) => span.tangles.map((group) => ({ span, group })));
+  all.sort((a, b) => b.group.length - a.group.length);
   const of = new Map();
-  all.forEach((t, i) => t.forEach((n) => of.set(n, i + 1)));
+  all.forEach(({ span, group }, i) => {
+    if (!of.has(span)) of.set(span, new Map());
+    for (const n of group) of.get(span).set(n, i + 1);
+  });
   return of;
 }
 
@@ -446,7 +452,7 @@ export function renderDepsDetail(spans) {
     if (label) { out.push(""); out.push(`dependencies${label}`); }
     d.tangles.slice(0, TANGLES).forEach((t, i) => {
       const internal = t.reduce((s, n) => s + [...(d.out.get(n) || [])].filter((x) => t.includes(x)).length, 0);
-      const g = label ? ` g${groups.get(t[0])}` : "";
+      const g = label ? ` g${groups.get(d)?.get(t[0])}` : "";
       // The span's own header already opened the block; a second blank line
       // under it buys nothing, and output is the budget this tool spends.
       if (!(label && i === 0)) out.push("");
@@ -509,9 +515,8 @@ const LAG = [
 
 export function renderCompare(before, now) {
   const out = [];
-  const at = (s) => (s.at ? ` at ${s.at.slice(0, 7)}` : "");
-  out.push(`snapshot    loadpath ${before.version}${at(before)}, --since ${before.since}`);
-  out.push(`now         loadpath ${now.version}${at(now)}, --since ${now.since}`);
+  out.push(`snapshot    loadpath ${before.version}, schema ${before.schema}`);
+  out.push(`now         loadpath ${now.version}, schema ${now.schema}`);
   out.push(`            ${num(before.files)} → ${count(now.files, "source file")}, ` +
            `${num(Object.keys(before.dirs).length)} → ${count(Object.keys(now.dirs).length, "directory", "directories")}`);
   const moved = [];
@@ -530,9 +535,11 @@ export function renderCompare(before, now) {
     if (!b) body.push(`measured now and not in the snapshot; there is nothing to compare it against`);
     else if (!n) body.push(`in the snapshot and not measured now; there is nothing to compare it against`);
     else {
-      if (b.edges !== n.edges || b.layers !== n.layers) {
-        body.push(`${num(b.edges)} → ${count(n.edges, "edge")}, ${b.layers} → ${count(n.layers, "layer")} deep`);
-      }
+      const changed = [];
+      if (b.edges !== n.edges) changed.push(`${num(b.edges)} → ${count(n.edges, "edge")}`);
+      if (b.nodes !== n.nodes) changed.push(`${num(b.nodes)} → ${count(n.nodes, n.unit)}`);
+      if (b.layers !== n.layers) changed.push(`${b.layers} → ${count(n.layers, "layer")} deep`);
+      if (changed.length) body.push(changed.join(", "));
       // By member set, never by count: one group dissolving while another of
       // the same size forms is the restructuring, and a count comparison calls
       // that pair of events nothing at all.
