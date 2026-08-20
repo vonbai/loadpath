@@ -78,6 +78,33 @@ const MANIFESTS = [
 // workspace glob's fixture.
 const APP_DIR = new Set(["src", "lib", "app", "web"]);
 
+// ── One population, two writers ──────────────────────────────────────────────
+//
+// The filesystem walk and the git log must admit the same paths. They did not:
+// history admitted anything with a source extension, so it voted for vendored,
+// generated and dot-directory files the walk had already refused, and it kept
+// directories that have since been deleted. On a pinned corpus the top two
+// co-change rows named four directories, none of them on disk. A lead the
+// reader cannot open is not a lead. The rule therefore lives here, once, and
+// both writers ask it rather than each restating a version of it.
+//
+// The checks that need the file itself — the generated-marker read, the
+// unreadable file, the symlink — stay with the walk. Git cannot answer them.
+
+// A directory neither writer enters. `.github` is the one dot-directory that
+// holds first-party code.
+const closed = (seg) => SKIP_DIR.has(seg) || (seg.startsWith(".") && seg !== ".github");
+
+function admits(submodules = new Set()) {
+  const subs = [...submodules];
+  return (rel) => {
+    if (!SOURCE_EXT.has(extname(rel))) return false;
+    if (rel.split("/").some(closed)) return false;
+    if (GENERATED_PATH.some((re) => re.test(rel))) return false;
+    return !subs.some((sm) => rel === sm || rel.startsWith(sm + "/"));
+  };
+}
+
 // ── Small helpers ────────────────────────────────────────────────────────────
 
 const median = (xs) => {
@@ -136,6 +163,7 @@ function submodulePaths(root) {
 }
 
 function inventory(root, prefix = "", submodules = new Set()) {
+  const admit = admits(submodules);
   const files = [];
   const unreadable = [];
   const walk = (abs) => {
@@ -143,17 +171,16 @@ function inventory(root, prefix = "", submodules = new Set()) {
     try { entries = readdirSync(abs, { withFileTypes: true }); }
     catch { return; }
     for (const e of entries) {
-      if (e.name.startsWith(".") && e.name !== ".github") continue;
-      if (SKIP_DIR.has(e.name)) continue;
       const p = join(abs, e.name);
       if (e.isSymbolicLink()) continue;             // never follow; loops and duplicates
-      if (e.isDirectory()) { walk(p); continue; }
+      // Pruning, not filtering: `admit` refuses every path under a closed
+      // directory anyway. Not descending is what keeps node_modules from
+      // costing a walk.
+      if (e.isDirectory()) { if (!closed(e.name)) walk(p); continue; }
       if (!e.isFile()) continue;
       const rel = relative(root, p).split(sep).join("/");
       if (prefix && !rel.startsWith(prefix + "/") && rel !== prefix) continue;
-      if ([...submodules].some((sm) => rel === sm || rel.startsWith(sm + "/"))) continue;
-      if (!SOURCE_EXT.has(extname(e.name))) continue;
-      if (GENERATED_PATH.some((re) => re.test(rel))) continue;
+      if (!admit(rel)) continue;
       const m = measure(p);
       if (m.unreadable) { unreadable.push(rel); continue; }
       if (m.generated) continue;
@@ -211,9 +238,11 @@ function byDirectory(files, isTest) {
 // status, author and timestamp together. The timestamp is the *committer*
 // date, because that is what --since filters on: bucketing by author date
 // put 99.7% of a rebased repository's commits in the final window and
-// annotated every pair "one window only" as though it were a fact about time. NUL separation is not optional: git
-// C-quotes any path holding a non-ASCII byte, a quote, a tab or a newline, and
-// such a path parses its own extension wrongly and vanishes.
+// annotated every pair "one window only" as though it were a fact about time.
+//
+// NUL separation is not optional: git C-quotes any path holding a non-ASCII
+// byte, a quote, a tab or a newline, and such a path parses its own extension
+// wrongly and vanishes.
 
 // Git reads `1y` as a date, not a duration. It resolves to nineteen days ago,
 // `6mo` to fourteen, and `30d` to ten days in the *future* — a day-of-month, so
@@ -240,7 +269,10 @@ function normalizeSince(input) {
   return canonical === t ? { since: t } : { since: canonical, rewritten: t };
 }
 
-function history(root, { since: requested, windows, breadthCap, prefix = "" }) {
+// `live` is the set of directories the inventory found on disk, and it is not
+// optional: the two writers report one page, and a history figure that has not
+// been joined against the tree can name a directory the reader cannot open.
+function history(root, { since: requested, windows, breadthCap, prefix = "", submodules = new Set(), live }) {
   const norm = normalizeSince(requested);
   if (norm.ambiguous) {
     return { available: false, reason: `--since ${norm.ambiguous} is ambiguous — git reads it as a day of the month, not a duration. Write it as ${/^\d+m$/i.test(norm.ambiguous) ? `${parseInt(norm.ambiguous, 10)}.months or ${parseInt(norm.ambiguous, 10)}.minutes` : "N.days, N.weeks, N.months or N.years"}.` };
@@ -277,6 +309,7 @@ function history(root, { since: requested, windows, breadthCap, prefix = "" }) {
   if (!res.ok) return { available: false, reason: res.err };
 
   const text = res.out.toString("utf8");
+  const admit = admits(submodules);
   const commits = [];
   const relocations = new Map();
   let cur = null;
@@ -297,20 +330,31 @@ function history(root, { since: requested, windows, breadthCap, prefix = "" }) {
       if (!/^[A-Z]\d*$/.test(st)) continue;
       if (st[0] === "R" || st[0] === "C") {
         const from = fields[++i], to = fields[++i];
-        if (from && to) {
-          if (SOURCE_EXT.has(extname(to)) && inScope(to)) cur.paths.push(to);
-          cur.edits++;
-          const move = inScope(from) || inScope(to) ? commonMove(from, to) : null;
-          if (move) {
-            const k = `${move[0]}\0${move[1]}`;
-            const r = relocations.get(k) || { from: move[0], to: move[1], n: 0, at: cur.at };
-            r.n++; r.at = Math.max(r.at, cur.at); relocations.set(k, r);
-          }
+        if (!from || !to) continue;
+        // The vote is a lead and takes the population rule with everything else
+        // that points somewhere.
+        if (admit(to) && inScope(to)) { cur.paths.push(to); cur.edits++; }
+        // The relocation is a record, and takes no filter at all. What a
+        // repository moved is what it moved: a 482-file specs -> archive is the
+        // migration it has already done, which is the best evidence of the one
+        // it is mid-way through, and neither side of it has to be code this
+        // tool counts. The section says it counts every file type, because
+        // "482 files" there means something the rest of the page does not.
+        const move = inScope(from) || inScope(to) ? commonMove(from, to) : null;
+        if (move) {
+          const k = `${move[0]}\0${move[1]}`;
+          const r = relocations.get(k) || { from: move[0], to: move[1], n: 0, at: cur.at };
+          r.n++; r.at = Math.max(r.at, cur.at); relocations.set(k, r);
         }
       } else {
         const p = fields[++i];
         if (!p) continue;
-        if (SOURCE_EXT.has(extname(p)) && inScope(p)) cur.paths.push(p);
+        if (!admit(p) || !inScope(p)) continue;
+        cur.paths.push(p);
+        // An edit is what separates maintenance from creation, so it is counted
+        // over the same paths the votes are. Counted over every path in the
+        // commit, one README edit lifted a bulk add of fifty files out of the
+        // creation damping below.
         if (st[0] === "A") cur.adds++; else cur.edits++;
       }
     }
@@ -324,8 +368,8 @@ function history(root, { since: requested, windows, breadthCap, prefix = "" }) {
     cutoff, cutoffDay, since, rewrittenFrom: norm.rewritten || "",
     commits: withSource,
     relocations: [...relocations.values()].filter((r) => r.n >= 3).sort((a, b) => b.n - a.n),
-    ...perDirectory(withSource, windows),
-    ...coChange(withSource, windows, breadthCap),
+    ...perDirectory(withSource, windows, live),
+    ...coChange(withSource, windows, breadthCap, live),
   };
 }
 
@@ -340,9 +384,17 @@ function commonMove(from, to) {
   return fa === fb ? null : [fa, fb];
 }
 
-function perDirectory(commits, windows) {
+// The window the commits actually occupy, which is not the window that was
+// asked for: --since sets a floor, and the oldest commit inside it sets the
+// start of everything measured against time.
+function windowSpan(commits) {
   const times = commits.map((c) => c.at).sort((a, b) => a - b);
-  const lo = times[0], hi = times[times.length - 1], span = Math.max(hi - lo, 1);
+  const lo = times[0], hi = times[times.length - 1];
+  return { lo, hi, span: Math.max(hi - lo, 1) };
+}
+
+function perDirectory(commits, windows, live) {
+  const { lo, hi, span } = windowSpan(commits);
   const dirs = new Map();
   for (const c of commits) {
     const seen = new Set();
@@ -358,6 +410,11 @@ function perDirectory(commits, windows) {
       e.authors.set(c.author, (e.authors.get(c.author) || 0) + 1);
     }
   }
+  // History knows directories the tree no longer has. The join happens here,
+  // in the measurement and exactly once, so that every renderer is handed the
+  // same population and no count can exceed the number of directories there
+  // are.
+  for (const d of [...dirs.keys()]) if (!live.has(d)) dirs.delete(d);
   // Commit-share concentration: the top author's share, and how many authors
   // clear a stated 5% share. The ratio ranked first in a defect model where the
   // raw count did not — but it is undefined where activity is absent, so it is
@@ -368,11 +425,23 @@ function perDirectory(commits, windows) {
     e.majorAuthors = shares.filter((n) => n / e.commits >= 0.05).length;
     e.authorCount = shares.length;
   }
-  return { dirs, lo, hi, span, windows };
+  // How far back "recently" reaches. Ninety days is the convention, but a
+  // window shorter than that cannot be asked a ninety-day question, and the
+  // sentence would then claim more than was measured — `--since 30.days` said
+  // "the last 90 days" for as long as the horizon was a constant in the
+  // renderer. Whole days, because that is the unit the line prints, and the
+  // cutoff is taken from the same number so the two cannot disagree. It is
+  // anchored at the newest commit in the window rather than at now: the
+  // measurement knows the window, not the calendar.
+  const horizonDays = Math.max(1, Math.min(90, Math.floor(span / 86400)));
+  const recent = hi - horizonDays * 86400;
+  const active = [...dirs.values()].filter((e) => e.last >= recent).length;
+  const unseen = live.size - dirs.size;
+  return { dirs, lo, hi, span, windows, horizonDays, active, dormant: dirs.size - active, unseen };
 }
 
-function coChange(commits, windows, cap) {
-  const { lo, span } = perDirectory(commits, windows);
+function coChange(commits, windows, cap, live) {
+  const { lo, span } = windowSpan(commits);
   const pair = new Map();
   const own = new Map();
   let capped = 0;
@@ -397,15 +466,22 @@ function coChange(commits, windows, cap) {
     }
   }
   const pairs = [];
+  let dropped = 0;
   for (const [k, v] of pair) {
     const [a, b] = k.split("\0");
     const total = v.reduce((x, y) => x + y, 0);
     const base = Math.min(own.get(a) || 0, own.get(b) || 0);
     if (total < 0.5 || base < 3) continue;
+    // A pair naming a directory the tree no longer has cannot be followed, and
+    // it outranked everything that could: the two strongest rows on a pinned
+    // corpus named four deleted directories. Dropped after the floor, so the
+    // count means pairs that would otherwise have been reported, and counted,
+    // because a silently shorter list is the same failure one step quieter.
+    if (!live.has(a) || !live.has(b)) { dropped++; continue; }
     pairs.push({ a, b, total, base, share: total / base, profile: v });
   }
   pairs.sort((x, y) => y.share - x.share);
-  return { pairs, capped, own };
+  return { pairs, capped, dropped, own };
 }
 
 // ── Manifests — exact, declared rather than inferred ─────────────────────────

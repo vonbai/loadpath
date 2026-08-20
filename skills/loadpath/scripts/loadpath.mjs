@@ -93,14 +93,21 @@ function main() {
     }
   }
 
-  const files = inventory(root, prefix, submodulePaths(root));
+  const submodules = submodulePaths(root);
+  const files = inventory(root, prefix, submodules);
   if (!files.length) {
     console.log(`${resolve(o.repo)}\n\nno source files found (after skipping vendored, generated and build output)`);
     return;
   }
   const conv = testConvention(files);
   const dirs = byDirectory(files, conv.isTest);
-  const hist = history(root, { since: o.since, windows: o.windows, breadthCap: o.cap, prefix });
+  const hist = history(root, {
+    since: o.since, windows: o.windows, breadthCap: o.cap, prefix,
+    // The same submodule set the walk used, and the tree it found. Both halves
+    // of the page owe the reader one population, and only the walk knows which
+    // directories a reader can still open.
+    submodules, live: new Set(dirs.keys()),
+  });
   // A subtree inside a module still belongs to that module, so the manifest
   // above the scope is kept beside the ones inside it. Both are what the
   // reader is told is declared, and both are what the analyzers are rooted at.

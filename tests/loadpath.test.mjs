@@ -11,6 +11,12 @@ import { join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+// Everything below goes through the command, because that is what a reader
+// runs. These two imports are for the one case the command's own clamps put
+// out of reach — see "no width of table fits the budget".
+import { renderL1 } from "../skills/loadpath/scripts/report.mjs";
+import { inventory, byDirectory, testConvention } from "../skills/loadpath/scripts/scan.mjs";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(HERE, "..", "skills", "loadpath", "scripts", "loadpath.mjs");
 
@@ -118,17 +124,32 @@ test("Java- and C#-style test names are recognised, not counted as implementatio
   } finally { r.clean(); }
 });
 
-// ── Deviation ranking ────────────────────────────────────────────────────────
+// ── Size ranking ─────────────────────────────────────────────────────────────
 
-test("ranks by deviation from the repository's own median, and prints the ratio", () => {
+test("ranks the largest directories first, and prints each against the median", () => {
   const r = repo();
   try {
     for (let d = 0; d < 5; d++) for (let i = 0; i < 2; i++) r.file(`small${d}/f${i}.go`);
     for (let i = 0; i < 20; i++) r.file(`wide/f${i}.go`);
     const out = r.run();
-    const first = out.split("furthest from")[1].split("\n")[1];
-    assert.ok(first.includes("wide"), `the outlier must rank first, got: ${first}`);
+    const first = out.split("largest directories")[1].split("\n")[1];
+    assert.ok(first.includes("wide"), `the largest must rank first, got: ${first}`);
     assert.ok(/10×\s*median/.test(first), `must print the ratio against the median, got: ${first}`);
+  } finally { r.clean(); }
+});
+
+test("the ranking claims size, because size is what it sorts by", () => {
+  const r = repo();
+  try {
+    for (let d = 0; d < 5; d++) for (let i = 0; i < 2; i++) r.file(`small${d}/f${i}.go`);
+    for (let i = 0; i < 20; i++) r.file(`wide/f${i}.go`);
+    const out = r.run();
+    assert.ok(line(out, "largest directories"), `the section must name what it computes:\n${out}`);
+    // files/median is monotone in files: dividing every row by one constant
+    // cannot reorder them, so a heading promising the directories furthest
+    // from this repository's norms promised a deviation nothing computed.
+    assert.ok(!/furthest|deviation/i.test(out), `no line may claim a deviation ranking:\n${out}`);
+    assert.ok(/10×\s*median/.test(line(out, "wide")), "and the ratio against the median stays");
   } finally { r.clean(); }
 });
 
@@ -268,6 +289,145 @@ test("no verdict word is ever emitted", () => {
   } finally { r.clean(); }
 });
 
+// ── One population ───────────────────────────────────────────────────────────
+//
+// The filesystem walk and the git log must admit the same paths, or the two
+// halves of the page describe different repositories. On the pinned
+// dependency-cruiser corpus the two strongest co-change rows named four
+// directories, none of which was on disk.
+
+test("a co-change pair naming a directory that is gone is dropped, and the drop is disclosed", () => {
+  const r = repo(); r.init();
+  try {
+    for (let i = 0; i < 5; i++) { r.file("a/f.go", `${i}\n`); r.file("b/f.go", `${i}\n`); r.commit(`2024-0${i + 1}-01T00:00:00`); }
+    rmSync(join(r.dir, "a"), { recursive: true });
+    r.commit("2024-07-01T00:00:00");
+    const out = r.run("--since", "20.years");
+    assert.ok(!/a \+ b/.test(out), `a lead must name a directory the reader can open:\n${out}`);
+    // A shorter list with no reason for being shorter is the same failure one
+    // step quieter, so the count and the reason are printed.
+    assert.match(out, /1 pairs named a directory the tree no longer has/, out);
+  } finally { r.clean(); }
+});
+
+test("vendored, generated and dot-directory paths cast no co-change vote", () => {
+  const r = repo(); r.init();
+  try {
+    for (let i = 0; i < 5; i++) {
+      r.file("src/a/f.go", `${i}\n`); r.file("src/b/f.go", `${i}\n`);
+      r.file("vendor/lib/v.go", `${i}\n`);      // skipped directory
+      r.file("src/api.pb.go", `${i}\n`);        // generated path
+      r.file(".cache/c.go", `${i}\n`);          // dot-directory
+      r.commit(`2024-0${i + 1}-01T00:00:00`);
+    }
+    const out = r.run("--since", "20.years");
+    assert.equal(nums(line(out, "co-change   "))[1], 2, `only admitted paths set a commit's breadth:\n${out}`);
+    const row = line(out, " + ");
+    const share = Number(row.match(/(\d+)%/)[1]);
+    // Three refused paths would split each commit's one vote five ways instead
+    // of keeping it whole, which drops this pair below the reporting floor.
+    assert.ok(share >= 80, `a refused path must not dilute the vote, got ${share}%: ${row}`);
+    for (const refused of ["vendor", "api.pb.go", ".cache"]) {
+      assert.ok(!out.includes(refused), `${refused} is not this repository's code, and may not appear as its subject`);
+    }
+  } finally { r.clean(); }
+});
+
+test("a submodule's paths cast no co-change vote", () => {
+  const r = repo(); r.init();
+  try {
+    r.file(".gitmodules", '[submodule "vendorlib"]\n\tpath = libs/vendorlib\n\turl = https://example.com/x.git\n');
+    for (let i = 0; i < 5; i++) {
+      r.file("src/a/f.go", `${i}\n`); r.file("src/b/f.go", `${i}\n`);
+      r.file("libs/vendorlib/v.go", `${i}\n`);
+      r.commit(`2024-0${i + 1}-01T00:00:00`);
+    }
+    const out = r.run("--since", "20.years");
+    // Another repository's code borrowed into this tree is not this tree's
+    // weight, and it is not this tree's coupling either.
+    assert.equal(nums(line(out, "co-change   "))[1], 2, `the submodule is not in this commit's breadth:\n${out}`);
+    assert.ok(!/vendorlib/.test(out), "no submodule path may appear as a subject of this repository");
+  } finally { r.clean(); }
+});
+
+test("the repository root is spelled the same in a co-change row as everywhere else", () => {
+  const r = repo(); r.init();
+  try {
+    for (let i = 0; i < 5; i++) { r.file("main.go", `${i}\n`); r.file("pkg/f.go", `${i}\n`); r.commit(`2024-0${i + 1}-01T00:00:00`); }
+    // The ranking and the structure table both print "." for the root. A bare
+    // leading space is not a directory a reader can open.
+    const row = line(r.run("--since", "20.years"), " + ");
+    assert.match(row, /\. \+ pkg/, `the root must carry its name: ${row}`);
+  } finally { r.clean(); }
+});
+
+test("a move out of a refused path into the tree is still a relocation", () => {
+  const r = repo(); r.init();
+  try {
+    for (let i = 0; i < 5; i++) r.file(`vendor/lib/f${i}.go`, `body ${i}\n`.repeat(20));
+    r.commit("2024-01-01T00:00:00");
+    r.git("mv", "vendor", "src");
+    r.commit("2024-02-01T00:00:00");
+    // Neither side is judged: a relocation is a record of what moved, and a
+    // repository is free to move code out of a directory this tool refuses.
+    assert.match(r.run("--since", "20.years"), /vendor → src/);
+  } finally { r.clean(); }
+});
+
+test("a docs edit does not lift a bulk creation out of the damping", () => {
+  const plain = repo(); plain.init();
+  const withDocs = repo(); withDocs.init();
+  try {
+    // The same five bulk-creation commits in both repositories; in one of them
+    // each commit also edits a README. `edits` counted every path in a commit,
+    // so that one edit read as maintenance and paid the full vote.
+    for (const [r, docs] of [[plain, false], [withDocs, true]]) {
+      for (let c = 0; c < 5; c++) {
+        for (let i = 0; i < 25; i++) { r.file(`a/f${c}_${i}.go`, "x\n"); r.file(`b/f${c}_${i}.go`, "x\n"); }
+        if (docs) r.file("README.md", `${c}\n`);
+        r.commit(`2020-0${c + 1}-01T00:00:00`);
+      }
+    }
+    const share = (r) => Number(line(r.run("--since", "20.years"), "a + b").match(/(\d+)%/)[1]);
+    const bare = share(plain);
+    assert.equal(share(withDocs), bare, "the README edit must change nothing about the pair");
+    assert.ok(bare < 20, `five commits that only create files stay damped, got ${bare}%`);
+  } finally { plain.clean(); withDocs.clean(); }
+});
+
+test("the history count names the population it counted", () => {
+  const r = repo(); r.init();
+  try {
+    r.file("p/a.go", "1\n"); r.commit("2024-01-01T00:00:00");
+    r.file("p/a.go", "2\n"); r.commit("2024-02-01T00:00:00");
+    r.file("README.md", "docs\n"); r.commit("2024-03-01T00:00:00");
+    // A documentation-only commit is not in this figure. A bare "N commits"
+    // invites the reader to reconcile it with the number git would give them.
+    assert.match(line(r.run("--since", "20.years"), "history     "), /^history\s+2 commits touching source since/);
+  } finally { r.clean(); }
+});
+
+test("the activity horizon is the window when the window is shorter than the convention", () => {
+  const r = repo(); r.init();
+  try {
+    // Dated against now, because --since is: a fixed calendar date cannot be
+    // inside a thirty-day window on the day this suite is run.
+    const ago = (n) => new Date(Date.now() - n * 86400000).toISOString().replace(/\.\d+Z$/, "Z");
+    r.file("old/x.go", "1\n"); r.commit(ago(400));
+    for (const [i, d] of [20, 10, 2].entries()) { r.file("new/y.go", `${i}\n`); r.commit(ago(d)); }
+    const long = line(r.run("--since", "20.years"), "activity");
+    assert.equal(Number(long.match(/last (\d+) days/)[1]), 90, `over a long window the horizon is the convention: ${long}`);
+
+    const short = r.run("--since", "30.days");
+    const days = Number(line(short, "activity").match(/last (\d+) days/)[1]);
+    const span = Number(line(short, "history     ").match(/spanning (\d+) days/)[1]);
+    // The sentence said "the last 90 days" whatever was measured, so a
+    // thirty-day window claimed sixty days it had never seen.
+    assert.ok(days <= span, `the horizon must not exceed the window measured: ${days} > ${span}`);
+    assert.ok(days <= 30, `nor the window asked for: ${days} > 30`);
+  } finally { r.clean(); }
+});
+
 // ── Relocations ──────────────────────────────────────────────────────────────
 
 test("a directory rename is reported as a relocation", () => {
@@ -280,6 +440,24 @@ test("a directory rename is reported as a relocation", () => {
     const out = r.run("--since", "20.years");
     assert.match(out, /relocations/);
     assert.ok(/old → new/.test(out), "the move must name both sides");
+  } finally { r.clean(); }
+});
+
+test("a documentation move is still a relocation, and the section says it counts every file type", () => {
+  const r = repo(); r.init();
+  try {
+    for (let i = 0; i < 5; i++) r.file(`specs/s${i}.md`, `spec ${i}\n`.repeat(20));
+    r.file("src/keep.go", "x\n");
+    r.commit("2024-01-01T00:00:00");
+    r.git("mv", "specs", "archive");
+    r.commit("2024-02-01T00:00:00");
+    const out = r.run("--since", "20.years");
+    // A record, not a lead. The migration a repository has already done is the
+    // best evidence of the one it is mid-way through, and filtering this table
+    // to the source population deleted exactly that evidence.
+    assert.ok(/specs → archive/.test(out), `a documentation move is history, not noise:\n${out}`);
+    assert.match(line(out, "relocations"), /every file type, not only source/,
+      "a file count that is wider here than everywhere else on the page must say so");
   } finally { r.clean(); }
 });
 
@@ -361,6 +539,23 @@ test("the structure table honours its budget", () => {
     const large = r.run("--structure", "--budget", "3000");
     assert.ok(small.length < large.length, "a smaller budget must produce less");
     assert.match(small, /directories not shown/);
+  } finally { r.clean(); }
+});
+
+test("no width of table fits the budget, and the smallest one is drawn anyway", () => {
+  const r = repo();
+  try {
+    for (let i = 0; i < 40; i++) r.file(`d${i}/f.go`, "x\n".repeat(i + 1));
+    const files = inventory(r.dir);
+    const dirs = byDirectory(files, testConvention(files).isTest);
+    // Called directly, because --budget clamps at 200 and 200 fits a row. The
+    // binary search draws its seed before the first comparison and keeps it
+    // when nothing fits, so a seed of twenty rows answered a budget of five
+    // with twenty rows — the clamp hid it rather than preventing it.
+    const table = renderL1({ dirs, hist: { available: false }, spans: [], budget: 5 });
+    const rows = table.split("\n").filter((l) => /^ {2}\d/.test(l));
+    assert.equal(rows.length, 1, `the smallest table there is, got ${rows.length} rows:\n${table}`);
+    assert.match(table, /\+39 directories not shown/, "and it still says what it did not show");
   } finally { r.clean(); }
 });
 
@@ -581,7 +776,7 @@ test("a flat distribution says so instead of presenting insertion order as outli
     for (let i = 0; i < 20; i++) r.file(`d${i}/f.go`, "x\n");
     const out = r.run();
     assert.match(out, /the distribution is flat/);
-    assert.ok(!/furthest from/.test(out), "there is nothing furthest when everything is equal");
+    assert.ok(!/largest directories/.test(out), "nothing is largest when everything is equal");
   } finally { r.clean(); }
 });
 
@@ -721,11 +916,14 @@ test("the manifest search descends past the repository root", () => {
 test("history stays inside the scope it was given", () => {
   const r = repo(); r.init();
   try {
-    r.file("sub/a/x.go"); r.file("out/b/y.go"); r.commit("2024-01-01T00:00:00");
-    for (let i = 0; i < 5; i++) { r.file("out/b/y.go", `${i}\n`); r.file("out/c/z.go", `${i}\n`); r.commit(`2024-0${i + 2}-01T00:00:00`); }
+    // `outside`, not `out`: `out` is a skipped directory, so the population
+    // rule would refuse those paths before the scope rule ever saw them, and
+    // the test would pass with the scope dropped entirely.
+    r.file("sub/a/x.go"); r.file("outside/b/y.go"); r.commit("2024-01-01T00:00:00");
+    for (let i = 0; i < 5; i++) { r.file("outside/b/y.go", `${i}\n`); r.file("outside/c/z.go", `${i}\n`); r.commit(`2024-0${i + 2}-01T00:00:00`); }
     const out = execFileSync("node", [CLI, join(r.dir, "sub"), "--since", "20.years"], { encoding: "utf8", env: ENV, stdio: ["ignore", "pipe", "pipe"] });
     assert.equal(nums(line(out, "history     "))[0], 1, "only commits touching the scope count");
-    assert.ok(!/out\//.test(out), "no path outside the scope may appear");
+    assert.ok(!/outside\//.test(out), "no path outside the scope may appear");
   } finally { r.clean(); }
 });
 

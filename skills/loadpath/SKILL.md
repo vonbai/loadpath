@@ -24,7 +24,7 @@ Three consequences hold in every use:
 ## Run it
 
 ```
-node scripts/loadpath.mjs [REPO]              orient — 813–1,493 tokens measured
+node scripts/loadpath.mjs [REPO]              orient — 729–1,517 tokens measured
 node scripts/loadpath.mjs [REPO] --structure  every directory, plus entangled groups
 node scripts/loadpath.mjs [REPO] --dir PATH   one subtree, file by file
 ```
@@ -38,7 +38,7 @@ node scripts/loadpath.mjs [REPO] --dir PATH   one subtree, file by file
 - **files and lines per directory** — median, p90, max. Everything below is read against these.
 - **activity** — directories touched recently, and how many were not. A directory with no recent commits is *unmeasured*, not known to be safe: on real repositories a fifth to two thirds of files go untouched in a window while some of them still carry later defects.
 - **top author N% of Mc** — the share of commits by the largest contributor, beside the raw count. Concentration ranked first among 65 metrics in a defect study where the raw count did not; it is undefined where nothing was committed, which is why both are printed.
-- **relocations** — what this repository has already moved, from git's rename records. The migration it has already done is usually the best evidence of the one it is mid-way through.
+- **relocations** — what this repository has already moved, from git's rename records. The migration it has already done is usually the best evidence of the one it is mid-way through. Alone on the page this is a record rather than a lead, so it counts every file a rename touched and not only source, and its header says so; the side a move came from is expected to be gone.
 - **co-change** — directories changing in the same commits, one commit casting one vote split across the pairs it implies, bucketed into time windows. Each row carries the vote it received in every window, and the denominator the share is taken over, because an average can look excellent while its worst case is total. Commits wider than the cap are sweeps, not coupling, and their count is disclosed.
 - **dependencies** — one **span** per ecosystem the repository declares, each measured by that ecosystem's own analyzer, named in the output. Spans stand side by side and are never added together: a Go package and a TypeScript file directory are not the same unit. An ecosystem that cannot be measured here says so and says why. Where that reason names a remedy — a toolchain to install, a cache to warm — put the command to the user for approval rather than running it, because a read must not change the machine; carry on with the exact measurements meanwhile, and raise it only when the task rests on the dependency graph. Entanglement is reported as **groups**: inside a group nothing can be built, tested, or replaced alone. Layer depth is how far weight travels before it reaches something that depends on nothing.
 

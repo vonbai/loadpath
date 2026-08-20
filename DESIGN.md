@@ -67,6 +67,10 @@ Four modules, three seams. The arrangement exists to contain one specific failur
 
 **Filesystem ↔ git.** Two independent sources, neither silently substituting for the other. Every module speaks repo-root-relative paths; that is an invariant of the common layer. v0.1.0 left this boundary unowned, so its two projections used different path namespaces and its own instruction to read them side by side could not be followed.
 
+They must also **admit the same population, from one predicate**, and **a lead must name a directory the reader can open**. Both were broken after the namespaces were fixed: history admitted anything with a source extension, so it voted for vendored, generated and dot-directory files the walk had refused, and it kept directories that had since been deleted. On the pinned dependency-cruiser corpus the two strongest co-change rows named four directories, none of them on disk. The predicate therefore lives in one place and both writers ask it, the join against the current tree happens in the measurement rather than in the renderer — once, so that every renderer is handed the same population — and what the join drops is disclosed with its count and its reason.
+
+**A record is not a lead, and neither rule reaches it.** Relocations report what this repository has already moved: the side it moved away from is *supposed* to be gone, and what moved is what moved, whatever its file type. Filtering that table to the source population deleted a 482-file `specs → archive` and every documentation move with it — which is exactly the evidence the section exists to carry, since the migration already done is the best evidence of the one in progress. A lead takes the population rule and the tree join; a record takes neither, and states the difference in its own header, because a file count that means something wider there than everywhere else on the page has to read as wider.
+
 ### Structure expresses it
 
 `scripts/scan.mjs` holds Inventory and History, `scripts/report.mjs` holds Report, `scripts/loadpath.mjs` is the entry point — everything exact. `scripts/deps.mjs` holds the quarantine — everything inexact.
@@ -87,17 +91,17 @@ Disclosure is an algorithm, not a flag. Each module discloses in three layers, a
 
 | | L0 — orient | L1 — structure | L2 — detail |
 |---|---|---|---|
-| **Inventory** | robust distribution summary plus deviation ranking, O(F log F) | flat table ordered by mass, binary-searched to a token budget, O(V log V) | file level for one named subtree, O(F_subtree) |
+| **Inventory** | robust distribution summary plus a size ranking read against it, O(F log F) | flat table ordered by mass, binary-searched to a token budget, O(V log V) | file level for one named subtree, O(F_subtree) |
 | **History** | age, commit count, active/dormant split, O(C) | weighted co-change with breadth cap and time windows, O(Σ min(k,cap)²) | not built |
 | **Dependency** | per declared ecosystem: which analyzer ran, layers deep, entangled group count — or a named absence, O(V+E) | entangled groups with their anchors, and each directory's layer and group carried on its own row, O(V+E) | not built; an edge list would contradict the rule above it |
 
-**L0 is the norms and the outliers. L1 is the structure. L2 is the detail.** Inventory's L0 summarises a distribution and ranks by deviation from it; History's and Dependency's L0 report totals and could do the same, which is the clearest unclaimed improvement in the tool.
+**L0 is the norms and the largest. L1 is the structure. L2 is the detail.** Inventory's L0 summarises a distribution and then ranks by size, each row printed as a ratio against that distribution. It does not rank by deviation and must not claim to: `files / median` is monotone in `files`, so dividing every row by one constant cannot reorder them, and a heading promising the directories furthest from this repository's norms promised an arithmetic nothing performed. A real deviation ranking — over a distribution the ratio does not already carry — is the clearest unclaimed improvement in the tool, together with the same treatment for History's and Dependency's L0, which report totals.
 
 ### Why the distribution comes first
 
 `cmd/cotx 56f` is uninterpretable alone. `files per directory: median 7, p90 32, max 136` makes every later row readable, and turns `136f` into *19× the median* — which is a fact about the distribution, checkable and exact, not a verdict. One line buys the meaning of every line after it.
 
-L0 is around twenty lines and carries the file and line totals, tree depth, language mix, test ratio, both distributions, repository age, the active-versus-dormant split, the modules declared by manifests, and the four directories furthest from the repository's own norms. It also answers which analyzer to run, because the manifest names the ecosystem.
+L0 is around twenty lines and carries the file and line totals, tree depth, language mix, test ratio, both distributions, repository age, the active-versus-dormant split, the modules declared by manifests, and the five largest directories, each against that median. It also answers which analyzer to run, because the manifest names the ecosystem.
 
 ### Why the structure table must meet a budget
 
@@ -126,7 +130,7 @@ The division of labour follows: **the tool traverses, the agent judges.** Traver
 A sorted table of self-contained rows, each directory a feature vector — files, lines, tests, commits, commit share, last touched, layer and group. Transitive reach and a normalised cumulative dependency figure belong here and are not built; both are one pass over a graph the tool already holds.
 
 - **No cross-line joins.** Each row is readable alone, because the norms are stated once at the top.
-- **Order carries meaning.** Rows are ranked by deviation from those norms, so the agent does not have to sort — something it can do but not reliably across many rows.
+- **Order carries meaning.** Rows are ranked by mass, and each carries its ratio against the norms stated above them, so the agent does not have to sort — something it can do but not reliably across many rows.
 - **No raw graphs.** Only traversal results.
 
 Paths carry the tree, and a full path on every row beats indentation: indentation's failure mode is attributing a row to the wrong parent, and it fails silently, while verbosity only costs tokens. Sorted paths group as a tree anyway.

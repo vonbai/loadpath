@@ -11,12 +11,12 @@ Loadpath 追踪真实的荷载路径。它**指向值得读的代码，不替你
 
 ## What it emits
 
-One command, 813–1,493 tokens across the three pinned corpora (36 to 1,093 source files), and 920–3,500 with `--structure`. Those are upper bounds: the divisor is calibrated with tiktoken against this tool's densest output, not a general prose ratio.
+One command, 729–1,517 tokens across the three pinned corpora (36 to 1,093 source files), and 837–3,523 with `--structure`. Those are upper bounds: the divisor is calibrated with tiktoken against this tool's densest output, not a general prose ratio.
 
 - **the distribution first** — median, p90 and max files per directory and lines per file, so every row after it is readable. `136f` means nothing until `median 7` is on the page; then it is 19× the median.
 - **activity** — what was touched recently, and what was not. A directory with no recent commits is *unmeasured*, not known to be safe.
 - **commit share** — the top author's fraction of a directory's commits, beside the raw count.
-- **relocations** — what this repository has already moved, from git's rename records. The migration already done is usually the best evidence of the one in progress.
+- **relocations** — what this repository has already moved, from git's rename records, counting every file type rather than only source. The migration already done is usually the best evidence of the one in progress.
 - **co-change** — directories changing in the same commits, one commit casting one vote split across the pairs it implies, with the vote it received in every window and the denominator its share is taken over.
 - **dependencies** — from the ecosystem's own analyzer, named in the output, one graph per ecosystem the repository declares. Entanglement as *groups*, and how many layers deep the load path runs.
 
@@ -68,8 +68,8 @@ node ~/.agents/skills/loadpath/scripts/loadpath.mjs /path/to/repo
 
 Everything published here is recomputed by the repository itself.
 
-- `node --test tests/loadpath.test.mjs` — 80 acceptance tests over synthetic repositories built per case.
-- `node tests/mutate.mjs` — 70 one-line feature deletions; **a surviving mutant fails the build.** v0.1.0's suite let 14 of 20 pass, including the line that broke its own headline claim. Three are marked *equivalent* — a second guard already produces the same observable, so they are asserted to survive and a kill means the stated proof went stale — and five are listed every run as *not exercised*, with the toolchain each would need. The number is never the claim; the list is.
+- `node --test tests/loadpath.test.mjs` — 91 acceptance tests over synthetic repositories built per case.
+- `node tests/mutate.mjs` — 78 one-line feature deletions; **a surviving mutant fails the build.** v0.1.0's suite let 14 of 20 pass, including the line that broke its own headline claim. Three are marked *equivalent* — a second guard already produces the same observable, so they are asserted to survive and a kill means the stated proof went stale — and five are listed every run as *not exercised*, with the toolchain each would need. The number is never the claim; the list is.
 - `node tests/measure.mjs` — every published figure recomputed from three pinned public repositories and compared against `tests/measure-baseline.json`. A pin that does not resolve fails the run.
 - `node tests/contract.mjs` — the skill's frontmatter, budget, pointers and vocabulary.
 

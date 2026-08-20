@@ -39,20 +39,18 @@ export function renderL0({ files, dirs, conv, hist, mans, filtered = [], spans, 
   out.push("");
   if (hist.available) {
     const days = Math.round((hist.hi - hist.lo) / 86400);
-    const cutoff = hist.hi - 90 * 86400;
-    // History knows directories that no longer exist. Intersect with the tree
-    // or the count exceeds the number of directories there are.
-    const live = [...hist.dirs.entries()].filter(([p]) => dirs.has(p));
-    const active = live.filter(([, d]) => d.last >= cutoff).length;
-    const dormant = live.length - active;
-    const unseen = dirs.size - live.length;
     // A rewritten spelling is shown as the rewrite it was, never as if the
     // reader had typed the thing that actually ran.
     const asked = hist.rewrittenFrom ? `--since ${hist.rewrittenFrom} → ${hist.since}` : `--since ${since}`;
-    out.push(`history     ${num(hist.commits.length)} commits since ${hist.cutoffDay} (${asked}), spanning ${days} days`);
-    out.push(`activity    ${active} touched in the last 90 days, ${dormant} not, ` +
-             `${unseen} with no commit in this window at all — of ${dirs.size} directories`);
-    if (dormant || unseen) out.push(`            a directory with no recent commit is unmeasured here, not known to be safe`);
+    // What the count counts. A commit touching only documentation is not in
+    // it, and a bare "N commits" invites the reader to reconcile it with a
+    // number git would give them.
+    out.push(`history     ${num(hist.commits.length)} commits touching source since ${hist.cutoffDay} (${asked}), spanning ${days} days`);
+    // The split, the horizon and the join against the tree are all measured in
+    // scan.mjs; this line spends them.
+    out.push(`activity    ${hist.active} touched in the last ${hist.horizonDays} days, ${hist.dormant} not, ` +
+             `${hist.unseen} with no commit in this window at all — of ${dirs.size} directories`);
+    if (hist.dormant || hist.unseen) out.push(`            a directory with no recent commit is unmeasured here, not known to be safe`);
   } else {
     out.push(`history     not measured — ${hist.reason}`);
   }
@@ -81,9 +79,14 @@ export function renderL0({ files, dirs, conv, hist, mans, filtered = [], spans, 
   out.push("");
   out.push(renderDeps(spans));
 
-  // Deviation ranking. Every row is a ratio against a figure printed above it.
+  // A size ranking, and it says so. Ranking by files/median is ranking by
+  // files: dividing every row by one constant cannot reorder them, so calling
+  // the result the directories furthest from the repository's norms claimed a
+  // deviation the arithmetic never computed. The ratio stays, because it is
+  // what makes 136f mean something — it is a ratio against a figure printed
+  // above it, which is a different job from choosing the order.
   const med = median(fileCounts) || 1;
-  const ranked = [...dirs.values()].sort((a, b) => b.files / med - a.files / med).slice(0, 5);
+  const ranked = [...dirs.values()].sort((a, b) => b.files - a.files).slice(0, 5);
   out.push("");
   // With a flat distribution every ratio is 1 and the sort is a no-op, so the
   // rows would be insertion order presented as outliers.
@@ -91,7 +94,7 @@ export function renderL0({ files, dirs, conv, hist, mans, filtered = [], spans, 
     out.push(`no directory departs from those norms; the distribution is flat`);
     return out.join("\n");
   }
-  out.push(`furthest from this repository's own norms`);
+  out.push(`largest directories, against the median`);
   for (const d of ranked) {
     const h = hist.available ? hist.dirs.get(d.path) : null;
     const share = h ? `  top author ${Math.round(h.topShare * 100)}% of ${h.commits}c` : "";
@@ -149,8 +152,11 @@ export function renderL1({ dirs, hist, spans, budget }) {
     return lines.join("\n");
   };
 
-  // Binary search to the budget, within about 15%.
-  let lo = 1, hi = rows.length, best = draw(Math.min(rows.length, 20));
+  // Binary search to the budget, within about 15%. The seed is the smallest
+  // table there is: seeded at twenty rows it survives untouched when no size
+  // fits, and the table then answers a budget of five with 265 tokens. The
+  // CLI clamps --budget at 200 and so cannot reach that, which hid it.
+  let lo = 1, hi = rows.length, best = draw(1);
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
     const s = draw(mid);
@@ -175,6 +181,7 @@ export function renderCoChange(hist, top) {
   const breadths = hist.commits.map((c) => new Set(c.paths.map((p) => dirname(p))).size).sort((a, b) => a - b);
   out.push(`co-change   ${hist.commits.length} commits, median ${median(breadths)} directories each, ${hist.windows} equal time windows`);
   if (hist.capped) out.push(`            ${hist.capped} commits touched more than the breadth cap and were excluded as sweeps`);
+  if (hist.dropped) out.push(`            ${hist.dropped} pairs named a directory the tree no longer has and were dropped`);
   if (!hist.pairs.length) { out.push("            no pair above the reporting floor"); return out.join("\n"); }
   out.push("");
   out.push(`  Each commit casts one vote, split across the pairs it implies. "share" is`);
@@ -185,7 +192,10 @@ export function renderCoChange(hist, top) {
     const prof = p.profile.map((x) => x.toFixed(1).padStart(4)).join(" ");
     const lo = Math.min(...p.profile), hi = Math.max(...p.profile);
     const conc = p.profile.filter((x) => x > 0).length === 1 ? "  in one window" : "";
-    out.push(`  ${(p.share * 100).toFixed(0).padStart(4)}%  [${prof} ]  of ${p.base}c  ${p.a} + ${p.b}${conc}`);
+    // The repository root has no name of its own, and it is spelled "." on
+    // every other row of the page. One population, one spelling — a bare
+    // leading space is not a directory a reader can open.
+    out.push(`  ${(p.share * 100).toFixed(0).padStart(4)}%  [${prof} ]  of ${p.base}c  ${p.a || "."} + ${p.b || "."}${conc}`);
   }
   out.push("");
   out.push(`  Directories changing together is the Common Closure criterion, a design`);
@@ -195,11 +205,18 @@ export function renderCoChange(hist, top) {
 }
 
 // ── Relocations ──────────────────────────────────────────────────────────────
+//
+// The one section that is a record rather than a lead. It names what moved,
+// and the side it moved away from is supposed to be gone — so it takes neither
+// the population rule nor the join against the tree. It therefore counts every
+// file a rename touched rather than only the source files the rest of the page
+// is about, and it says so: a count that means something different from every
+// other count here has to read as different.
 
 export function renderRelocations(hist) {
   if (!hist.available) return `relocations  not measured — ${hist.reason}`;
-  if (!hist.relocations.length) return `relocations  none — no directory has moved 3 or more files in this window`;
-  const out = [`relocations  what this repository has already moved`];
+  if (!hist.relocations.length) return `relocations  none — no directory has moved 3 or more files, of any type, in this window`;
+  const out = [`relocations  what this repository has already moved — every file type, not only source`];
   for (const r of hist.relocations.slice(0, 8)) {
     out.push(`  ${day(r.at)}  ${r.n.toString().padStart(4)} files   ${r.from} → ${r.to}`);
   }
