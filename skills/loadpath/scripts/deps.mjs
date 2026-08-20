@@ -353,40 +353,9 @@ export function dependencies(root, { files }) {
   return notMeasured("no analyzer applies to this repository — dependency edges are not guessed here");
 }
 
+// A reason is data, exactly as History's `unavailable` is. Composing the
+// sentence a reader sees is Report's job, and this module does not do it —
+// see DESIGN.md, "Measure ↔ render".
 function notMeasured(why) {
-  return { measured: false, why, line: `dependencies  not measured — ${why}` };
-}
-
-export function renderDeps(d, { level = 0 } = {}) {
-  if (!d.measured) return d.line;
-  const out = [];
-  // A partial resolution is stated on the same line as the number it qualifies.
-  // A reader who sees only the count will otherwise read a partial graph as the
-  // whole one, which is the failure this tool exists to avoid.
-  out.push(`dependencies  ${d.edges} edges over ${d.nodes.size} ${d.nodes.size===1?d.unit:d.unitPlural}, via ${d.provenance}${d.note ? ` — ${d.note}` : ""}`);
-  out.push(`              load path is ${d.depth} layers deep; ${d.tangles.length} mutually entangled group(s)`);
-  if (level === 0) return out.join("\n");
-
-  for (const t of d.tangles.slice(0, 3)) {
-    const internal = t.reduce((s, n) => s + [...(d.out.get(n) || [])].filter((x) => t.includes(x)).length, 0);
-    out.push("");
-    out.push(`  entangled: ${t.length} ${d.unitPlural}, ${internal} internal edges`);
-    const rank = t.map((n) => ({ n, deg: [...(d.out.get(n) || [])].filter((x) => t.includes(x)).length + t.filter((m) => (d.out.get(m) || new Set()).has(n)).length }))
-      .sort((a, b) => b.deg - a.deg);
-    for (const r of rank.slice(0, 5)) out.push(`    ${String(r.deg).padStart(3)} of the group's edges   ${r.n}`);
-    if (rank.length > 5) out.push(`    +${rank.length - 5} more`);
-    out.push(`    Inside a group nothing can be built, tested, or replaced alone.`);
-  }
-  if (!d.tangles.length) {
-    out.push(`              no group found in the ${d.nodes.size} ${d.unitPlural} ${d.provenance} resolved`);
-  }
-
-  const top = [...d.fanOut.entries()].map(([n, o]) => ({ n, o, i: d.fanIn.get(n) || 0 }))
-    .filter((x) => x.o >= 3 && x.i <= 1).sort((a, b) => b.o - a.o).slice(0, 3);
-  if (top.length) {
-    out.push("");
-    out.push(`  fan-out 3 or more with fan-in 1 or less`);
-    for (const t of top) out.push(`    fan-out ${String(t.o).padStart(3)}  fan-in ${t.i}   ${t.n}`);
-  }
-  return out.join("\n");
+  return { measured: false, why };
 }

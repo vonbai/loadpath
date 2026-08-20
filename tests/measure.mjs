@@ -90,10 +90,16 @@ for (const c of CORPUS) {
   }
 
   if (warmOnly) {
-    if (c.eco === "Go") {
-      try { sh("go", ["mod", "download"], dir); console.log(`  warmed  ${c.name}`); }
-      catch (e) { console.log(`  FAIL  ${c.name} go mod download — ${String(e.message).split("\n")[0].slice(0, 120)}`); failedFetch = true; }
-    } else { console.log(`  fetched ${c.name}`); }
+    // The scan refuses to reach the network, so whatever each ecosystem's
+    // analyzer needs is fetched here, named, and paid for once.
+    try {
+      if (c.eco === "Go") sh("go", ["mod", "download"], dir);
+      else if (c.eco === "Node") sh("npx", ["--yes", "madge", "--version"], dir);
+      console.log(`  warmed  ${c.name} (${c.eco})`);
+    } catch (e) {
+      console.log(`  FAIL  ${c.name} could not be warmed — ${String(e.message).split("\n")[0].slice(0, 120)}`);
+      failedFetch = true;
+    }
     continue;
   }
 
@@ -159,11 +165,26 @@ if (record) {
   for (const [corpus, want] of Object.entries(base)) {
     const got = seen[corpus];
     if (!got) { console.log(`  FAIL  ${corpus} is in the baseline and was not measured`); failed = true; continue; }
+    // An analyzer that is not installed here did not regress; it was not run.
+    // Saying so is the difference between a gap and a defect, and the two must
+    // never be printed the same way.
+    if (want.analyzer !== "none" && got.analyzer === "none") {
+      console.log(`  NOT EXERCISED  ${corpus}: ${want.analyzer} is unavailable here, so its dependency figures were not recomputed`);
+      for (const k of ["edges", "entangled", "layers", "analyzer", "orientTokens", "structureTokens"]) delete want[k];
+    }
     for (const [k, v] of Object.entries(want)) {
+      // Token counts carry the current date, and a date one character wider
+      // moves them by a few. A band, stated, catches a divisor error without
+      // failing on the calendar.
+      if (k.endsWith("Tokens")) {
+        const drift = Math.abs(got[k] - v) / v;
+        if (drift > 0.05) { console.log(`  FAIL  ${corpus}.${k}: measured ${got[k]}, baseline ${v} (${Math.round(drift * 100)}% outside the 5% band)`); failed = true; }
+        continue;
+      }
       if (got[k] !== v) { console.log(`  FAIL  ${corpus}.${k}: measured ${got[k]}, baseline ${v}`); failed = true; }
     }
   }
-  if (!failed) console.log(`\nEvery figure matches tests/measure-baseline.json, recomputed from the pinned commits.`);
+  if (!failed) console.log(`\nEvery figure matches tests/measure-baseline.json, recomputed from the pinned commits; token counts within a stated 5% band.`);
 } else {
   console.log(`\nno baseline yet — run with --record once the figures are trusted`);
 }

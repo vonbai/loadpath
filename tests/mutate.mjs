@@ -113,6 +113,8 @@ const MUTANTS = [
   ["python looks only at the repository root", `${S}/deps.mjs`,
     'const roots = ["", "src"]', 'const roots = [""]',
     { uncovered: "needs grimp installed; the suite does not pip install." }],
+  ["the orient view loses its dependency line", `${S}/report.mjs`,
+    'out.push(renderDeps(deps, { level: 0 }));', "void 0;"],
   ["the installed copy cannot name its version", `${S}/loadpath.mjs`,
     'const VERSION = "0.2.2";', 'const VERSION = "0.0.0";'],
   ["only the root Go module is analysed", `${S}/deps.mjs`,

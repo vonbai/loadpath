@@ -67,7 +67,7 @@ export function renderL0({ files, dirs, conv, hist, mans, deps, root, since, win
   }
 
   out.push("");
-  out.push(deps.line);
+  out.push(renderDeps(deps, { level: 0 }));
 
   // Deviation ranking. Every row is a ratio against a figure printed above it.
   const med = median(fileCounts) || 1;
@@ -203,6 +203,42 @@ export function renderL2({ files, conv, hist, prefix }) {
   for (const f of sorted) {
     const t = conv.isTest(f.path) ? " test" : "     ";
     out.push(`  ${String(f.lines).padStart(w)}L${t}  ${f.path}`);
+  }
+  return out.join("\n");
+}
+
+// The quarantine measures; this renders it. Nothing computes and prints in
+// the same place, which is why v0.1.0's truncation could go undisclosed.
+export function renderDeps(d, { level = 0 } = {}) {
+  if (!d.measured) return `dependencies  not measured — ${d.why}`;
+  const out = [];
+  // A partial resolution is stated on the same line as the number it qualifies.
+  // A reader who sees only the count will otherwise read a partial graph as the
+  // whole one, which is the failure this tool exists to avoid.
+  out.push(`dependencies  ${d.edges} edges over ${d.nodes.size} ${d.nodes.size===1?d.unit:d.unitPlural}, via ${d.provenance}${d.note ? ` — ${d.note}` : ""}`);
+  out.push(`              load path is ${d.depth} layers deep; ${d.tangles.length} mutually entangled group(s)`);
+  if (level === 0) return out.join("\n");
+
+  for (const t of d.tangles.slice(0, 3)) {
+    const internal = t.reduce((s, n) => s + [...(d.out.get(n) || [])].filter((x) => t.includes(x)).length, 0);
+    out.push("");
+    out.push(`  entangled: ${t.length} ${d.unitPlural}, ${internal} internal edges`);
+    const rank = t.map((n) => ({ n, deg: [...(d.out.get(n) || [])].filter((x) => t.includes(x)).length + t.filter((m) => (d.out.get(m) || new Set()).has(n)).length }))
+      .sort((a, b) => b.deg - a.deg);
+    for (const r of rank.slice(0, 5)) out.push(`    ${String(r.deg).padStart(3)} of the group's edges   ${r.n}`);
+    if (rank.length > 5) out.push(`    +${rank.length - 5} more`);
+    out.push(`    Inside a group nothing can be built, tested, or replaced alone.`);
+  }
+  if (!d.tangles.length) {
+    out.push(`              no group found in the ${d.nodes.size} ${d.unitPlural} ${d.provenance} resolved`);
+  }
+
+  const top = [...d.fanOut.entries()].map(([n, o]) => ({ n, o, i: d.fanIn.get(n) || 0 }))
+    .filter((x) => x.o >= 3 && x.i <= 1).sort((a, b) => b.o - a.o).slice(0, 3);
+  if (top.length) {
+    out.push("");
+    out.push(`  fan-out 3 or more with fan-in 1 or less`);
+    for (const t of top) out.push(`    fan-out ${String(t.o).padStart(3)}  fan-in ${t.i}   ${t.n}`);
   }
   return out.join("\n");
 }

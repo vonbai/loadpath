@@ -57,7 +57,7 @@ Four modules, three seams. The arrangement exists to contain one specific failur
 
 **Dependencies** — the only module permitted to be inexact. Hides which external analyzer to try, how to parse it, and how to label provenance. Returns `NotMeasured` rather than a number when no analyzer applies.
 
-**Report** — renders facts at a requested depth. Hides formatting, alignment, truncation, and the token budget. No other module prints.
+**Report** — renders facts at a requested depth. Hides formatting, alignment, truncation, and the token budget. No other module prints — including the quarantine, which returns a reason as data and never the sentence a reader sees. `tests/loadpath.test.mjs` holds it to that: `deps.mjs` may not contain a padding or logging call.
 
 ### The seams
 
@@ -70,6 +70,8 @@ Four modules, three seams. The arrangement exists to contain one specific failur
 ### Structure expresses it
 
 `scripts/scan.mjs` holds Inventory and History, `scripts/report.mjs` holds Report, `scripts/loadpath.mjs` is the entry point — everything exact. `scripts/deps.mjs` holds the quarantine — everything inexact.
+
+Two measurement bounds live in `scan.mjs` beside the other shared numerics, because a budget the renderer enforces and an estimate the entry point prints must be the same number. They were not: the constant was written twice, and the copies diverged by 36% on exactly the output the budget trims.
 
 The file boundary *is* the exact/inferred seam, visible from a directory listing without reading code. Measurement and rendering are separated for the second reason the seams section gives: in v0.1.0 nothing that computed was stopped from printing, so truncation went undisclosed and one claim came to live in four files. A single file would leave all four modules as function groupings, which is a shallow expression of the design.
 

@@ -17,8 +17,8 @@ import { existsSync, statSync, realpathSync } from "node:fs";
 import { resolve, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inventory, history, manifests, submodulePaths, byDirectory, testConvention, tryGit, tokens, CHARS_PER_TOKEN } from "./scan.mjs";
-import { renderL0, renderL1, renderL2, renderCoChange, renderRelocations } from "./report.mjs";
-import { dependencies, renderDeps } from "./deps.mjs";
+import { renderL0, renderL1, renderL2, renderCoChange, renderRelocations, renderDeps } from "./report.mjs";
+import { dependencies } from "./deps.mjs";
 
 // `npx skills add` copies skills/loadpath/ and nothing else, so package.json
 // does not travel with the installed skill. Without this constant an installed
@@ -124,13 +124,13 @@ function main() {
   // and call them the repository's.
   const analyzerRoot = resolve(root, commonAncestor(mans.map((m) => m.path)) || prefix);
   const deps = dependencies(analyzerRoot, { files });
-  const depLine = deps.measured ? renderDeps(deps, { level: 0 }) : deps.line;
 
   const parts = [];
   parts.push(root + (prefix ? "/" + prefix : ""));
   if (scopeNote) parts.push(scopeNote);
   parts.push("");
-  parts.push(renderL0({ files, dirs, conv, hist, mans, deps: { line: depLine }, root, since: o.since, windows: o.windows }));
+  // The whole result, not a pre-rendered line: the entry point does not format.
+  parts.push(renderL0({ files, dirs, conv, hist, mans, deps, root, since: o.since, windows: o.windows }));
 
   const reloc = renderRelocations(hist);
   if (reloc) { parts.push(""); parts.push(reloc); }

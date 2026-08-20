@@ -930,3 +930,26 @@ test("a module that fails to resolve is disclosed beside the edge count", { skip
     assert.match(l, /1 of 2 modules resolved/, `the drop must be stated: ${l}`);
   } finally { r.clean(); }
 });
+
+test("a measured dependency graph appears in the default view, not only under --structure", { skip: !hasGo() }, () => {
+  const r = repo();
+  try {
+    r.file("go.mod", "module example.com/root\ngo 1.21\n");
+    r.file("a/x/x.go", "package x\n");
+    r.file("main.go", 'package main\nimport _ "example.com/root/a/x"\nfunc main(){}\n');
+    const l = line(r.run(), "dependencies");
+    assert.match(l, /1 edges over 2 packages/, `the orient view must carry the graph: ${l}`);
+    // The bug this covers rendered the literal string "undefined" here while
+    // every other test stayed green.
+    assert.doesNotMatch(l, /undefined|not measured/, l);
+  } finally { r.clean(); }
+});
+
+test("the quarantine measures and does not format", () => {
+  const deps = readFileSync(join(dirname(CLI), "deps.mjs"), "utf8");
+  // DESIGN.md, "Measure ↔ render": nothing computes and prints in the same
+  // place. v0.1.0's truncation went undisclosed because something did.
+  for (const idiom of ["padStart(", "padEnd(", "console.log("]) {
+    assert.ok(!deps.includes(idiom), `deps.mjs lays out output with ${idiom}; that belongs to report.mjs`);
+  }
+});
