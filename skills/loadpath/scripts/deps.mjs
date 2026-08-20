@@ -161,11 +161,22 @@ function goModule(root, at) {
 }
 
 // Project-to-project edges from .csproj XML. Exact, and needs no toolchain.
+//
+// The walk stops somewhere, and where it stopped is part of what it measured: a
+// directory past the bound is never opened, so nothing inside it was ever a
+// candidate, and a graph quietly missing a whole solution reads as the entire
+// one. The bound is named rather than written into the comparison, and the
+// directories it refused are counted and returned as data. That count was
+// gathered and dropped on the floor for as long as the bound has existed, which
+// made this the one truncation in the tool that stated nothing. Composing the
+// sentence a reader sees is still Report's job.
+const CSPROJ_DEPTH = 12;
+
 function csprojAnalyzer(root) {
   const projects = [];
-  let capped = 0;
+  let unsearched = 0;
   const walk = (abs, d) => {
-    if (d > 12) { capped++; return; }
+    if (d > CSPROJ_DEPTH) { unsearched++; return; }
     let es; try { es = readdirSync(abs, { withFileTypes: true }); } catch { return; }
     for (const e of es) {
       if (e.isDirectory()) { if (!e.name.startsWith(".") && e.name !== "bin" && e.name !== "obj") walk(join(abs, e.name), d + 1); }
@@ -185,7 +196,8 @@ function csprojAnalyzer(root) {
       if (to !== from) { edges.add(from + "\0" + to); nodes.add(to); }
     }
   }
-  return { provenance: ".csproj ProjectReference", edges, nodes, unit: "project", unitPlural: "projects", scope: "" };
+  return { provenance: ".csproj ProjectReference", edges, nodes, unit: "project", unitPlural: "projects", scope: "",
+           unsearched, searchDepth: CSPROJ_DEPTH };
 }
 
 // grimp knows which modules exist, which a parser cannot: `from x import y`
@@ -612,9 +624,12 @@ function span(root, fam, { files, prefix, subtree }) {
     if (c.length > 1) groupOf.set(n, tangles.indexOf(c) + 1);
   }));
 
+  // What the search never looked at travels with the graph it qualifies. An
+  // analyzer that bounds its own walk is the only one that knows it did.
   return { eco: fam.eco, measured: true, provenance: r.provenance, unit: r.unit, unitPlural,
            note: r.note || "", scope, out, nodes: kept, edges: within.size, tangles, depth, fanIn, fanOut, layerOf, groupOf,
-           reach, reachWhy, crossings: prefix ? crossings : null, load };
+           reach, reachWhy, crossings: prefix ? crossings : null, load,
+           unsearched: r.unsearched || 0, searchDepth: r.searchDepth || 0 };
 }
 
 // A reason is data, exactly as History's `unavailable` is. Composing the

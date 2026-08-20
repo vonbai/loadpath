@@ -131,7 +131,7 @@ const MUTANTS = [
     "if (dst !== src)", "if (true)",
     { equivalent: "Go forbids a package importing itself, so `go list` never emits a self-edge for the guard to drop." }],
   ["the csproj walk stops at depth one", `${S}/deps.mjs`,
-    "if (d > 12) { capped++; return; }", "if (d > 1) { capped++; return; }"],
+    "const CSPROJ_DEPTH = 12;", "const CSPROJ_DEPTH = 1;"],
   ["python looks only at the repository root", `${S}/deps.mjs`,
     'const roots = ["", "src"]', 'const roots = [""]',
     { uncovered: "needs grimp installed; the suite does not pip install." }],
@@ -274,6 +274,10 @@ const MUTANTS = [
     "if (binary) return { unreadable: true, binary: true };", ""],
   ["the files with no line count are not disclosed", `${S}/report.mjs`,
     "if (withheld) {", "if (false) {"],
+  // The count was gathered and never returned for as long as the bound existed,
+  // which is a disclosure that fails the same way as one deleted here.
+  ["the depth bound on the csproj walk goes unmentioned", `${S}/report.mjs`,
+    "if (d.unsearched) {", "if (false) {"],
 
   // What the page spends on saying nothing, and what it says wrongly.
   ["the share column survives a repository with one author", `${S}/report.mjs`,

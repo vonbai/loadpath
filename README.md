@@ -70,8 +70,8 @@ node ~/.agents/skills/loadpath/scripts/loadpath.mjs /path/to/repo
 
 Everything published here is recomputed by the repository itself. These four are the gate a change passes before it lands, run locally; the same battery runs on Node 18, 22 and 24 at each release tag, which is where cross-platform behaviour and a cold analyzer cache are worth paying for.
 
-- `node --test tests/loadpath.test.mjs` — 128 acceptance tests over synthetic repositories built per case.
-- `node tests/mutate.mjs` — 114 one-line feature deletions; **a surviving mutant fails the build.** v0.1.0's suite let 14 of 20 pass, including the line that broke its own headline claim. Three are marked *equivalent* — a second guard already produces the same observable, so they are asserted to survive and a kill means the stated proof went stale — and five are listed every run as *not exercised*, with the toolchain each would need. The number is never the claim; the list is.
+- `node --test tests/loadpath.test.mjs` — 129 acceptance tests over synthetic repositories built per case.
+- `node tests/mutate.mjs` — 115 one-line feature deletions; **a surviving mutant fails the build.** v0.1.0's suite let 14 of 20 pass, including the line that broke its own headline claim. Three are marked *equivalent* — a second guard already produces the same observable, so they are asserted to survive and a kill means the stated proof went stale — and five are listed every run as *not exercised*, with the toolchain each would need. The number is never the claim; the list is.
 - `node tests/measure.mjs` — every published figure recomputed from three pinned public repositories and compared against `tests/measure-baseline.json`. A pin that does not resolve fails the run.
 - `node tests/contract.mjs` — the skill's frontmatter, budget, pointers and vocabulary.
 

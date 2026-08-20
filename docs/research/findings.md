@@ -334,3 +334,27 @@ And a caution about repair: post-hoc correction can fix the number and break the
 No retained paper measured whether any presentation actually reduces over-trust in a reader, human or agent. The presentation half rests on design argument and on evidence about what figures hide, not on measured reader behaviour — and that is partly a search-plan limitation, since `trust calibration` in cs.HC returned autonomous-vehicle work rather than developer-tool research. A second run targeting static-analysis warning actionability, overreliance, and cognitive forcing functions would be the honest way to close it.
 
 The 5% major-contributor threshold is inherited from earlier work rather than derived, and no retained paper tested its sensitivity.
+
+---
+
+## 10. Addenda — what the implementation settled, 2026-08-20
+
+This is the research record and it is not rewritten: what was known when a decision was taken has to stay readable. Where the shipped tool has since answered, superseded or declined something above, the correction is recorded here against the section it corrects.
+
+**§1, the per-ecosystem table.** Four analyzers ship: `go list -e -mod=readonly -json ./...`, `.csproj` `<ProjectReference>`, `grimp`, and madge — pinned at `madge@8.0.0`, fetched with `npx --offline`, and run with `--extensions ts,tsx,js,jsx,mjs` rather than `--extensions ts` alone. `clang -MM -MG` was researched and not built; Java, Rust, Ruby and PHP remain named absences. Any reading of that table as one analyzer per repository is superseded: each declared ecosystem is measured by its own analyzer at the ancestor of its own manifests and reported as its own span, never merged, never first-answer-wins. See `docs/adr/0013`.
+
+**§1, the sanity assertion.** "Edges > 0, node count ≈ file count" ships as a proportional gate — at least two nodes, and a fifth or more of the source directories in the scope the analyzer was actually pointed at. Measuring coverage against the whole repository rejected correct graphs for looking where they were sent, and where two ecosystems share one root the denominator is still wider than the ecosystem; `docs/evidence.md` records that under *Known limits*.
+
+**§2, feedback arc set.** Not built. It was to ship labelled *a sufficient set, not the minimum, and not a recommendation* — but nothing in this tool names an edge to cut, because naming one is a move rather than a question.
+
+**§2, Lakos NCCD.** Not built, and now declined rather than pending. It compresses a whole load path into one score, which `docs/evidence.md` rejects as a composite, and a score is what invites the verdict ADR 0001 keeps out. What did ship from the same traversal is layer depth and transitive reach.
+
+**§6 and §7, the budget.** The binary search replaced the fixed budget split, as recommended here: the structure table is flat, ordered by mass, and binary-searched to `--budget` within about 15%. `DESIGN.md` now describes what ships rather than the rollup.
+
+**§7, the transitive reach table.** Reach is built and is not a table. It is reported beside the high fan-out nodes that already earned a line, because on a table the budget trims, a column is paid for by every row and read on a handful. The backwards-edge signal that DSM layering was to make implementable is still not built; the layer depth it rests on is.
+
+**§8, code age distribution.** Not built. What ships is coarser and unconditional — the active, dormant and unseen split at L0, and each file's last touch inside the window under `--dir`.
+
+**§8, near-duplicate pairs, and the cache.** Both accepted and unimplemented, with their status recorded on the decisions themselves: `docs/adr/0010` and `docs/adr/0008`. The before-and-after comparison the cache was to make free instead ships as `--snapshot` and `--compare` over layout and spans alone, because history lags a move by design — `docs/adr/0014`.
+
+**§8, manifests.** The path filter and the duplicate-name collapse ship as measured here, including the re-measurement at vite. The `templates?/` segment rule and the hyphenated `template[-_.]` rule remain two separate rules and only the second matches `template-vanilla`; the limit, and the principle that bounds how the list may grow, are carried into `docs/evidence.md` under *Known limits*.

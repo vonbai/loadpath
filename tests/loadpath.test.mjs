@@ -961,6 +961,31 @@ test("the csproj search descends past the first level", () => {
   } finally { r.clean(); }
 });
 
+test("the csproj walk says how many directories it did not search", () => {
+  const r = repo();
+  try {
+    // Two projects the walk reaches, so there is a graph for the line to
+    // qualify rather than an absence.
+    for (const n of ["A", "B"]) {
+      const dep = n === "A" ? '<ItemGroup><ProjectReference Include="../B/B.csproj" /></ItemGroup>' : "";
+      r.file(`${n}/${n}.csproj`, `<Project>${dep}</Project>`);
+      r.file(`${n}/${n.toLowerCase()}.cs`, `class ${n} {}`);
+    }
+    // And one past the bound. The walk refuses to open the thirteenth level, so
+    // the project inside it is not in the graph — which is the fact the line
+    // has to carry. Without it the two projects above read as all of them.
+    const deep = Array.from({ length: 13 }, (_, i) => `d${i}`).join("/");
+    r.file(`${deep}/Z/Z.csproj`, "<Project></Project>");
+    r.file(`${deep}/Z/z.cs`, "class Z {}");
+    const out = r.run();
+    assert.match(line(out, "dependencies"), /2 projects/, `the reachable projects must still be measured: ${line(out, "dependencies")}`);
+    const l = out.split("\n").find((x) => x.includes("not searched"));
+    assert.ok(l, `a depth-bounded walk must say what it did not search:\n${out}`);
+    assert.match(l, /1 directory sat deeper than the 12 levels this walk descends/, l);
+    assert.match(l, /not searched for projects, nor anything under it/, l);
+  } finally { r.clean(); }
+});
+
 test("a go module is analysed without reaching the network", () => {
   const r = repo();
   try {

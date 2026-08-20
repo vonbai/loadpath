@@ -509,9 +509,12 @@ function perDirectory(commits, { lo, hi, span }, live) {
       if (seen.has(d)) continue;
       seen.add(d);
       let e = dirs.get(d);
-      if (!e) dirs.set(d, (e = { commits: 0, first: c.at, last: c.at, authors: new Map() }));
+      // The oldest commit in the window was accumulated here too, for the age
+      // triple — oldest, median, newest — that the research proposed and this
+      // tool did not build. Nothing read it. A measurement nothing renders is
+      // not a spare part; it is a second thing to keep correct.
+      if (!e) dirs.set(d, (e = { commits: 0, last: c.at, authors: new Map() }));
       e.commits++;
-      e.first = Math.min(e.first, c.at);
       e.last = Math.max(e.last, c.at);
       e.authors.set(c.author, (e.authors.get(c.author) || 0) + 1);
     }

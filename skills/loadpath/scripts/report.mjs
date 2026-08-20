@@ -387,6 +387,15 @@ function renderSpan(d, label) {
   // A reader who sees only the count will otherwise read a partial graph as the
   // whole one, which is the failure this tool exists to avoid.
   out.push(`${head}  ${count(d.edges, "edge")} over ${count(d.nodes.size, d.unit, d.unitPlural)}, via ${d.provenance}${d.note ? ` — ${d.note}` : ""}`);
+  // Where the analyzer's own search stopped, on its own line, because it
+  // qualifies the count above it. The note beside that count says a module was
+  // found and did not resolve; this says a directory was never opened, so
+  // nothing inside it was ever a candidate — a different fact, and the quieter
+  // of the two.
+  if (d.unsearched) {
+    const [were, them] = d.unsearched === 1 ? ["was", "it"] : ["were", "them"];
+    out.push(`${pad}${count(d.unsearched, "directory", "directories")} sat deeper than the ${d.searchDepth} levels this walk descends and ${were} not searched for ${d.unitPlural}, nor anything under ${them}`);
+  }
   // Once, here. The detail below used to repeat it in other words two lines
   // later — "0 mutually entangled group(s)" and then "no group found" — and a
   // fact stated twice invites the reader to look for the difference.

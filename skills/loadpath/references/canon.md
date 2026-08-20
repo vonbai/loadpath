@@ -84,7 +84,7 @@ Four arXiv papers, read in isolation, behind the co-change scoring in `scripts/s
 
 **Name findings from a grounded vocabulary.** Li, Liang & Avgeriou, *Warnings: Violation Symptoms Indicating Architecture Erosion* (arXiv:2212.12168v2) hand-labelled 606 genuine violation symptoms out of 21,583 keyword hits — roughly 97% false positives before human judgement. Structural inconsistency is the largest category at 205, and the one that module-boundary advice concerns. That precision figure is the standing argument against any lexical detector.
 
-**What no source supplies.** None validates that directory-level co-change tracks erosion at all; the practitioner study explicitly declines the causal claim. None supplies a threshold, a precision figure, or a window length — so every constant in `scan.mjs` is tunable convention, not a principled value, and should be read that way.
+**What no source supplies.** None validates that directory-level co-change tracks erosion at all; the practitioner study explicitly declines the causal claim. None supplies a threshold, a precision figure, or a window length — so every constant that shapes a measurement in this tool is tunable convention, not a principled value, and should be read that way. They no longer all sit in `scan.mjs`: the command line holds the defaults and their bounds, the renderer holds the caps, and the quarantine holds the ceiling on transitive reach. `docs/evidence.md` is the register, and names each one with the file that spends it.
 
 ## Dependencies must run one way
 

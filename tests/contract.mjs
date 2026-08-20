@@ -208,5 +208,100 @@ for (const m of new Set([...text.matchAll(/`(--[a-z]+)[^`]*`/g)].map((x) => x[1]
   }
 }
 
+// 9. Every truncation states what it dropped. DESIGN.md makes that a law, and a
+// law is worth what it can be checked against: a slice whose result is rendered
+// carries its "+N more" beside it. v0.1.0 cut every list in silence, and a
+// reader who cannot tell a short list from a complete one stops looking exactly
+// where the evidence was.
+{
+  const src = readFileSync(join(S, "scripts", "report.mjs"), "utf8");
+  const lines = src.split("\n");
+  // The two shapes a disclosure takes in this file: the shared `more()` helper,
+  // or a "+" immediately before the interpolation carrying the count.
+  const DISCLOSES = /\bmore\(|\+\$\{/;
+  // The `.slice(0, …)` sites that are not a truncated list, each with its
+  // reason. Keyed on the expression, so a rename or a changed cap breaks the
+  // entry instead of silently widening it — the way the ADR anchors above break
+  // when the code they cite moves.
+  const NOT_A_LIST = {
+    "names.slice(0, 3)": "the count is printed beside the ellipsis, so the line already says what it dropped",
+    "s.at.slice(0, 7)": "a commit id shortened to seven characters: a string, not a list",
+  };
+  // Measured against this file: the widest real gap is the largest-directories
+  // block, where the rows themselves are printed between the slice and its
+  // "+N more". A window rather than the enclosing function, because renderL0 is
+  // long enough that any disclosure anywhere in it would pass.
+  const WINDOW = 20;
+  for (const expr of Object.keys(NOT_A_LIST)) {
+    if (!src.includes(expr)) errors.push(`the truncation whitelist names ${expr}, which report.mjs no longer contains`);
+  }
+  lines.forEach((l, i) => {
+    if (!l.includes(".slice(0,")) return;
+    if (Object.keys(NOT_A_LIST).some((e) => l.includes(e))) return;
+    if (DISCLOSES.test(lines.slice(i, i + WINDOW).join("\n"))) return;
+    errors.push(`report.mjs:${i + 1} truncates and nothing within ${WINDOW} lines says what it dropped — ${l.trim()}`);
+  });
+}
+
+// 10. docs/evidence.md is the register of every constant that shapes a
+// measurement. A register that drifts from the code is worse than none, because
+// a reader tunes the number it names while the tool goes on using another — and
+// the paragraph this reads had gone stale exactly that way, naming two
+// constants that no longer existed and missing a dozen that did. Each entry
+// pins one value in the file the register says it lives in.
+{
+  const md = readFileSync(join(ROOT, "docs", "evidence.md"), "utf8").split("\n");
+  const from = md.findIndex((l) => l.startsWith("- **No source supplies a threshold"));
+  const to = md.findIndex((l, i) => i > from && (/^- \*\*/.test(l) || /^## /.test(l)));
+  if (from < 0) errors.push("docs/evidence.md no longer carries the constants register");
+  else {
+    // Backticks off and whitespace flattened: the register is prose, and a
+    // rewrap or a code fence should not read as a deleted constant.
+    const block = md.slice(from, to < 0 ? md.length : to).join(" ").replace(/`/g, "").replace(/\s+/g, " ");
+    const CONSTANTS = [
+      ["--since default",           "loadpath.mjs", /since: "12\.months"/,                              "12.months"],
+      ["--budget default",          "loadpath.mjs", /budget: 1600/,                                     "1600 tokens"],
+      ["--budget floor",            "loadpath.mjs", /"--budget"\)[^\n]*take\(a, i, 200,/,               "with a floor of 200;"],
+      ["--windows default",         "loadpath.mjs", /windows: 4/,                                       "--windows to 4"],
+      ["--windows clamp",           "loadpath.mjs", /"--windows"\)[^\n]*take\(a, i, 2, 12,/,            "range 2 to 12"],
+      ["breadth cap default",       "loadpath.mjs", /cap: 30/,                                          "breadth cap to 30"],
+      ["breadth cap floor",         "loadpath.mjs", /"--cap"\)[^\n]*take\(a, i, 2, Infinity,/,          "with a floor of 2;"],
+      ["--top default",             "loadpath.mjs", /top: 12/,                                          "to 12 pairs"],
+      ["relocation floor",          "scan.mjs",     /filter\(\(r\) => r\.n >= 3\)/,                     "at 3 files moved"],
+      ["test-convention quorum",    "scan.mjs",     /Math\.max\(3, votes\[0\]\?\.n \* 0\.2\)/,          "max(3, 20%)"],
+      ["activity horizon",          "scan.mjs",     /Math\.min\(90, Math\.floor\(span \/ 86400\)\)/,    "min(90 days, the window)"],
+      ["creation damping",          "scan.mjs",     /c\.edits === 0 \? 0\.15 : 1/,                      "damped to 0.15"],
+      ["co-change vote floor",      "scan.mjs",     /const CO_FLOOR = 0\.5;/,                           "0.5 votes"],
+      ["co-change support floor",   "scan.mjs",     /const CO_SUPPORT = 3;/,                            "over 3 commits"],
+      ["scatter threshold and top", "scan.mjs",     /minDirs = 3, top = 3/,                             "at 3 directories, the widest 3"],
+      ["major-author share",        "scan.mjs",     /n \/ e\.commits >= 0\.05/,                         "5% of a directory's commits"],
+      ["token bound, output",       "scan.mjs",     /CHARS_PER_TOKEN = 2\.6;/,                          "2.6 characters per token"],
+      ["token bound, prose",        "scan.mjs",     /CHARS_PER_TOKEN_PROSE = 4\.4;/,                    "4.4 for prose"],
+      ["manifest walk depth",       "scan.mjs",     /if \(depth > 3\) return;/,                         "descends 3 directories below the root"],
+      ["binary sniff",              "scan.mjs",     /const BINARY_SNIFF = 8000;/,                       "8,000-byte binary sniff"],
+      ["L0 caps",                   "report.mjs",   /const LANGS = 5, CONVS = 2, LARGEST = 5, RELOCS = 8, TANGLES = 3, FANOUT = 3;/,
+        "5 languages, 2 test conventions, 5 largest directories, 8 relocations, 3 entangled groups and 3 fan-out rows"],
+      ["fan-out gate",              "report.mjs",   /x\.o >= 3 && x\.i <= 1/,                           "3 or more outward edges with 1 or fewer inward"],
+      ["compare list cap",          "report.mjs",   /const CAP = 5;/,                                   "names 5 members"],
+      ["compare mass threshold",    "report.mjs",   /Math\.abs\(delta\) > 0\.2/,                        "more than a fifth"],
+      ["single-author column drop", "report.mjs",   /topShare === 1 && e\.majorAuthors === 1/,          "top author holds every one of its commits"],
+      ["reach ceiling",             "deps.mjs",     /const REACH_CEILING = 20000;/,                     "below 20,000 components"],
+      ["busiest counterparts",      "deps.mjs",     /const TOP = 5;/,                                   "5 busiest counterpart directories"],
+      ["Go module walk depth",      "deps.mjs",     /if \(d > 4\) return;/,                             "descends 4 directories below the root"],
+      ["csproj walk depth",         "deps.mjs",     /const CSPROJ_DEPTH = 12;/,                         ".csproj walk 12"],
+    ];
+    const cache = new Map();
+    for (const [what, file, re, named] of CONSTANTS) {
+      if (!cache.has(file)) cache.set(file, readFileSync(join(S, "scripts", file), "utf8"));
+      if (!re.test(cache.get(file))) errors.push(`docs/evidence.md puts the ${what} in ${file}, and ${file} no longer carries it`);
+      if (!block.includes(named)) errors.push(`the constants register no longer names the ${what} ("${named}")`);
+    }
+    for (const f of new Set(CONSTANTS.map((c) => c[1]))) {
+      if (!block.includes(f)) errors.push(`the constants register pins a value in ${f} without naming the file`);
+    }
+  }
+}
+
 if (errors.length) { console.log("FAIL"); errors.forEach((e) => console.log(`  - ${e}`)); process.exit(1); }
 console.log(`   documents consistent: ${mds.length} markdown files, pointers resolve, no withdrawn terminology, ADRs match the code`);
+console.log(`   truncations disclosed in report.mjs, and the constants register matches the four scripts`);

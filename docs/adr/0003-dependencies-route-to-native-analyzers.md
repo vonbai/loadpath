@@ -7,3 +7,11 @@ So the tool does not guess. It shells out to the ecosystem's own analyzer when o
 ## Consequences
 
 Coverage drops to whatever analyzers a machine happens to have, and on a repository with none the dependency axis is simply absent. That is the trade: an absent axis costs a reader nothing, and a fabricated one costs them a restructuring.
+
+## Correction, 2026-08-20
+
+The decision stands; the list of analyzers naming it did not survive contact.
+
+`jdeps` was never adopted. It reads `.class` files rather than source, so it needs a successful Maven or Gradle build before it can say anything — a different cost class from every other analyzer here — and Java is a named absence instead. The analyzer this decision did not name is the one that costs least: `.csproj` `<ProjectReference>` XML, read directly, needing no toolchain at all.
+
+What ships is `go list`, `.csproj`, `grimp` and madge. `docs/evidence.md` carries the table, with each one's granularity and what it needs; `docs/adr/0013` records the later decision that each of them is rooted at its own ecosystem's manifests and reported as its own span.
