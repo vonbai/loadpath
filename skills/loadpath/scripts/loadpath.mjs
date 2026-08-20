@@ -18,7 +18,7 @@ import { dependencies } from "./deps.mjs";
 // does not travel with the installed skill. Without this constant an installed
 // copy cannot say what it is, and output pasted into an issue carries no
 // provenance. tests/contract.mjs holds it equal to package.json.
-const VERSION = "0.3.1";
+const VERSION = "0.3.2";
 
 // What the command line said, and what this tool did with it. Every departure
 // between the two is carried out of here rather than made quietly: a flag it

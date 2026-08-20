@@ -53,7 +53,7 @@ Calling a real analyzer is not the same as trusting it: the dominant failure mod
 Requires Node 18 or newer. Filesystem and history measurements need nothing else; dependency spans have the analyzer requirements above.
 
 ```bash
-npx --yes skills add vonbai/loadpath@v0.3.1 --global
+npx --yes skills add vonbai/loadpath@v0.3.2 --global
 ```
 
 The unpinned form, `vonbai/loadpath`, tracks `main`: every change there has passed the single local `npm test` gate below, but only a release-tagged state has run mutation analysis and the suite across Node 18, 22 and 24 on Linux with a cold analyzer cache.
@@ -70,7 +70,7 @@ node ~/.agents/skills/loadpath/scripts/loadpath.mjs /path/to/repo
 
 Everything published here is recomputed by the repository itself. There is **one gate**: `npm test` — acceptance, contract and measurement, about half a minute — and a change passes it before it lands. The deep questions (is the suite itself alive, does this hold on other platforms and Node versions, on a cold cache) are asked once per release, remotely, by the tag-triggered battery; a mutation survivor there stops the release, not your afternoon.
 
-- `node --test tests/loadpath.test.mjs` — 138 acceptance tests over synthetic repositories built per case.
+- `node --test tests/loadpath.test.mjs` — 139 acceptance tests over synthetic repositories built per case.
 - `node tests/mutate.mjs` — 120 one-line feature deletions; **a surviving mutant fails the release.** v0.1.0's suite let 14 of 20 pass, including the line that broke its own headline claim. Three are marked *equivalent* — a second guard already produces the same observable, so they are asserted to survive and a kill means the stated proof went stale — and five are listed every run as *not exercised*, with the toolchain each would need. The number is never the claim; the list is.
 - `node tests/measure.mjs` — every published figure recomputed from four pinned public repositories, one of them a Go+TypeScript monorepo that holds the span contract to real bytes, and compared against `tests/measure-baseline.json`. A pin that does not resolve fails the run.
 - `node tests/contract.mjs` — the skill's frontmatter, budget, pointers and vocabulary.

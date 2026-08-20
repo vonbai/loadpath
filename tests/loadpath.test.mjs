@@ -5,9 +5,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { delimiter, join, dirname } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -71,6 +71,20 @@ const field = (s, label) => {
   const m = (s || "").match(new RegExp(`${label}\\s+(-?[\\d,]+)`));
   return m ? Number(m[1].replace(/,/g, "")) : NaN;
 };
+
+// Node's public seam is the CLI, but its analyzer normally arrives through an
+// npx cache that a release runner intentionally starts without. Put a tiny,
+// deterministic npx at the same process boundary so analyzer semantics are
+// exercised on every machine instead of silently skipped with the cache.
+function withMadge(script, run) {
+  const bin = mkdtempSync(join(tmpdir(), "lp-madge-"));
+  const npx = join(bin, "npx");
+  try {
+    writeFileSync(npx, `#!/usr/bin/env node\n${script}\n`);
+    chmodSync(npx, 0o755);
+    return run({ ...ENV, PATH: `${bin}${delimiter}${process.env.PATH ?? ""}` });
+  } finally { rmSync(bin, { recursive: true, force: true }); }
+}
 
 // ── Inventory ────────────────────────────────────────────────────────────────
 
@@ -972,6 +986,23 @@ test("history stays inside the scope it was given", () => {
   } finally { r.clean(); }
 });
 
+test("a subdirectory scan does not report relocations from outside its scope", () => {
+  const r = repo(); r.init();
+  try {
+    r.file("sub/keep.go", "1\n");
+    for (let i = 0; i < 5; i++) r.file(`outside/old/f${i}.md`, `spec ${i}\n`);
+    r.commit("2024-01-01T00:00:00");
+    r.git("mv", "outside/old", "outside/new");
+    r.file("sub/keep.go", "2\n");
+    r.commit("2024-02-01T00:00:00");
+    const out = execFileSync("node", [CLI, join(r.dir, "sub"), "--since", "20.years"], {
+      encoding: "utf8", env: ENV, stdio: ["ignore", "pipe", "pipe"],
+    });
+    assert.doesNotMatch(out, /outside\/old|outside\/new|→/,
+      `an all-file relocation record still belongs to the requested subtree:\n${out}`);
+  } finally { r.clean(); }
+});
+
 test("the layer depth is measured, not asserted", () => {
   const r = repo();
   try {
@@ -1267,7 +1298,7 @@ test("a Go backend and a TS frontend are two spans, not one winner", () => {
   } finally { r.clean(); }
 });
 
-test("a Node span measures every declared source root", { skip: !hasMadge() }, () => {
+test("a Node span measures every declared source root", () => {
   const r = repo();
   try {
     r.file("package.json", '{"name":"root","private":true,"workspaces":["packages/*"]}');
@@ -1278,12 +1309,19 @@ test("a Node span measures every declared source root", { skip: !hasMadge() }, (
     r.file("app/package.json", '{"name":"app","private":true}');
     r.file("app/src/a/a.js", 'import "../b/b.js";\n');
     r.file("app/src/b/b.js", "export const b = 1;\n");
-    const l = line(r.run(), "dependencies");
+    const out = withMadge(`
+const args = process.argv.slice(2);
+const both = args.includes("packages") && args.includes("app");
+process.stdout.write(JSON.stringify(both
+  ? { "packages/x/a.js": ["packages/y/b.js"], "packages/y/b.js": [], "app/src/a/a.js": ["app/src/b/b.js"], "app/src/b/b.js": [] }
+  : { "x/a.js": ["y/b.js"], "y/b.js": [] }));`, (env) =>
+      execFileSync(process.execPath, [CLI, r.dir], { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] }));
+    const l = line(out, "dependencies");
     assert.match(l, /2 edges over 4 file directories/, `packages/ and app/ are one Node span: ${l}`);
   } finally { r.clean(); }
 });
 
-test("layers and groups keep their span identity when ecosystems share directories", { skip: !hasMadge() }, () => {
+test("layers and groups keep their span identity when ecosystems share directories", () => {
   const r = repo();
   try {
     r.file("package.json", '{"name":"polyglot","version":"1.0.0"}');
@@ -1294,7 +1332,8 @@ test("layers and groups keep their span identity when ecosystems share directori
     r.file("src/A/a.cs", "class A {}\n");
     r.file("src/B/B.csproj", '<Project><ItemGroup><ProjectReference Include="../A/A.csproj" /></ItemGroup></Project>');
     r.file("src/B/b.cs", "class B {}\n");
-    const out = r.run("--structure");
+    const out = withMadge(`process.stdout.write(JSON.stringify({ "A/a.ts": ["B/b.ts"], "B/b.ts": ["A/a.ts"] }));`, (env) =>
+      execFileSync(process.execPath, [CLI, r.dir, "--structure"], { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] }));
     const csharp = out.split("dependencies (C#)\n")[1]?.split("dependencies (Node)\n")[0] ?? "";
     const node = out.split("dependencies (Node)\n")[1] ?? "";
     assert.match(csharp, /entangled g1:/, `the C# group keeps its page identity:\n${out}`);

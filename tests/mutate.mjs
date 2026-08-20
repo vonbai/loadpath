@@ -136,7 +136,7 @@ const MUTANTS = [
   ["the orient view loses its dependency line", `${S}/report.mjs`,
     'out.push(renderDeps(spans));', "void 0;"],
   ["the installed copy cannot name its version", `${S}/loadpath.mjs`,
-    'const VERSION = "0.3.1";', 'const VERSION = "0.0.0";'],
+    'const VERSION = "0.3.2";', 'const VERSION = "0.0.0";'],
   ["only the root Go module is analysed", `${S}/deps.mjs`,
     "const { mods, unsearched } = goModules(root);", "const { mods, unsearched } = { mods: [root], unsearched: 0 };"],
   ["the Go module path boundary is treated as a lexical prefix", `${S}/deps.mjs`,
