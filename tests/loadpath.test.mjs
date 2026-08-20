@@ -46,6 +46,16 @@ const line = (out, needle) => out.split("\n").find((l) => l.includes(needle));
 const hasGo = () => {
   try { execFileSync("go", ["version"], { stdio: "ignore" }); return true; } catch { return false; }
 };
+// madge arrives through npx, so its presence is a property of this machine's
+// cache. A span it cannot measure is still a span; only the assertion changes.
+let madgeSeen = null;
+const hasMadge = () => {
+  if (madgeSeen === null) {
+    try { execFileSync("npx", ["--yes", "--offline", "madge", "--version"], { stdio: "ignore", timeout: 120000 }); madgeSeen = true; }
+    catch { madgeSeen = false; }
+  }
+  return madgeSeen;
+};
 const nums = (s) => (s || "").match(/-?\d[\d,]*/g)?.map((x) => Number(x.replace(/,/g, ""))) ?? [];
 // `nums` counts the 90 inside "p90" and the 90 inside "90 days". Where a field
 // has a label, read it by label.
@@ -942,6 +952,229 @@ test("a measured dependency graph appears in the default view, not only under --
     // The bug this covers rendered the literal string "undefined" here while
     // every other test stayed green.
     assert.doesNotMatch(l, /undefined|not measured/, l);
+  } finally { r.clean(); }
+});
+
+// ── Spans: one ecosystem, one graph, side by side ───────────────────────────
+
+test("a Go backend and a TS frontend are two spans, not one winner", () => {
+  const r = repo();
+  try {
+    r.file("go.mod", "module example.com/m\n\ngo 1.21\n");
+    r.file("alpha/a.go", 'package alpha\n\nimport _ "example.com/m/beta"\n');
+    r.file("beta/b.go", "package beta\n");
+    r.file("package.json", '{"name":"web","version":"1.0.0"}');
+    r.file("tsconfig.json", "{}");
+    r.file("src/ui/u.ts", 'import { c } from "../core/c";\nexport const u = c;\n');
+    r.file("src/core/c.ts", "export const c = 1;\n");
+    const out = r.run();
+    const go = line(out, "dependencies (Go)");
+    const node = line(out, "dependencies (Node)");
+    // Both ecosystems are declared on this page, so both owe the reader a line.
+    // Which of them a toolchain can measure here decides the line's content and
+    // never whether it exists.
+    assert.ok(go, `the Go span is missing:\n${out}`);
+    assert.ok(node, `the Node span is missing:\n${out}`);
+    if (hasGo()) assert.match(go, /1 edges over 2 packages, via go list/, go);
+    else assert.match(go, /go is not on PATH/, go);
+    if (hasMadge()) assert.match(node, /1 edges over 2 file directories, via madge/, node);
+    else assert.match(node, /not measured — \S/, node);
+    assert.ok(!/no analyzer applies/.test(out), `two declared ecosystems cannot be no ecosystems:\n${out}`);
+  } finally { r.clean(); }
+});
+
+test("a split-tree monorepo roots each analyzer at its own ecosystem", { skip: !hasGo() }, () => {
+  const r = repo();
+  try {
+    r.file("backend/go.mod", "module example.com/svc\n\ngo 1.21\n");
+    r.file("backend/alpha/a.go", 'package alpha\n\nimport _ "example.com/svc/beta"\n');
+    r.file("backend/beta/b.go", "package beta\n");
+    r.file("frontend/package.json", '{"name":"web","version":"1.0.0"}');
+    r.file("frontend/src/index.js", "export const x = 1;\n");
+    r.file("api/pyproject.toml", '[project]\nname = "api"\n');
+    r.file("api/pkg/__init__.py", "x = 1\n");
+    const out = r.run("--structure");
+    assert.match(line(out, "dependencies (Go)"), /1 edges over 2 packages/, `the Go module is under backend/, not at the root:\n${out}`);
+    // grimp is named only by an analyzer that was rooted where the pyproject
+    // is. Rooted at the ancestor of every manifest it would find no project.
+    assert.match(line(out, "dependencies (Python)"), /grimp/, `Python must be analysed at api/:\n${out}`);
+    assert.ok(!/no analyzer applies/.test(out), out);
+    // Nodes are the repository's directories, or the layer column joins to
+    // nothing: the analyzer names them relative to its own root.
+    assert.ok(/L\d\s+backend\/alpha$/m.test(out), `the layer column must carry repository-relative paths:\n${out}`);
+  } finally { r.clean(); }
+});
+
+test("an ecosystem declared without its analyzer is a named absence, not silence", () => {
+  const r = repo();
+  const bin = mkdtempSync(join(tmpdir(), "lp-bin-"));
+  try {
+    r.file("go.mod", "module example.com/m\n\ngo 1.21\n");
+    r.file("alpha/a.go", 'package alpha\n\nimport _ "example.com/m/beta"\n');
+    r.file("beta/b.go", "package beta\n");
+    // A PATH holding only what the tool itself needs. `go` is absent from it
+    // whether or not this machine has one, so the case is exercised everywhere.
+    for (const b of ["git", "sh"]) {
+      const p = execFileSync("sh", ["-c", `command -v ${b} || true`], { encoding: "utf8" }).trim();
+      if (p) execFileSync("ln", ["-s", p, join(bin, b)]);
+    }
+    execFileSync("ln", ["-s", process.execPath, join(bin, "node")]);
+    const out = execFileSync(process.execPath, [CLI, r.dir], {
+      encoding: "utf8", env: { ...ENV, PATH: bin }, stdio: ["ignore", "pipe", "pipe"],
+    });
+    const l = line(out, "dependencies");
+    assert.match(l, /go is not on PATH/, `a Go repository with no toolchain is not a repository with no dependencies: ${l}`);
+    assert.match(l, /1 Go module was not analysed/, `the reader must learn what the absence cost: ${l}`);
+    assert.ok(!/no analyzer applies/.test(out), `the analyzer applies; it is not installed:\n${out}`);
+  } finally { rmSync(bin, { recursive: true, force: true }); r.clean(); }
+});
+
+test("an application's private package.json beside src is a declared module", () => {
+  const r = repo();
+  try {
+    // The ordinary frontend application: private, because npm's flag means
+    // "do not publish", which is what an application is.
+    r.file("package.json", '{"name":"app","private":true}');
+    r.file("src/index.js", "export const x = 1;\n");
+    const out = r.run();
+    assert.match(out, /^ +Node +\.$/m, `a private application is a declared module:\n${out}`);
+  } finally { r.clean(); }
+});
+
+test("workspace-noise package.json stay filtered", () => {
+  const r = repo();
+  try {
+    r.file("package.json", '{"name":"root","version":"1.0.0"}');
+    r.file("src/index.js", "export const x = 1;\n");
+    // A workspace glob matches these; they declare nothing. On one real
+    // repository this shape was 297 of 299 package.json files.
+    for (const n of ["x", "y"]) {
+      r.file(`packages/${n}/package.json`, '{"private":true,"version":"0.0.0"}');
+      r.file(`packages/${n}/index.js`, "export const y = 1;\n");
+    }
+    const out = r.run();
+    const block = out.split("declared modules")[1].split("\n\n")[0];
+    assert.match(block, /^ +Node +\.$/m, `the real module must survive: ${block}`);
+    assert.ok(!/packages\//.test(block), `a nameless private package is not a module: ${block}`);
+  } finally { r.clean(); }
+});
+
+test("manifests sharing one name are templates, not modules — dropped and disclosed", () => {
+  const r = repo();
+  try {
+    r.file("package.json", '{"name":"root","version":"1.0.0"}');
+    r.file("src/index.js", "export const x = 1;\n");
+    // Three scaffolds, private, each with its own src/, each carrying the same
+    // name. No registry would take the collision, so none of them is a module —
+    // and the first one is not either, which is why all three go.
+    for (const n of ["vue", "react", "solid"]) {
+      r.file(`scaffold/app-${n}/package.json`, '{"name":"starter","private":true}');
+      r.file(`scaffold/app-${n}/src/main.js`, "export const y = 1;\n");
+    }
+    const out = r.run();
+    const block = out.split("declared modules")[1].split("\n\n")[0];
+    assert.match(block, /^ +Node +\.$/m, `the real module must survive: ${block}`);
+    assert.ok(!/scaffold\//.test(block), `a copied name is not a module: ${block}`);
+    // A drop of that size decides how the section reads, so it is disclosed.
+    assert.match(block, /\+3 filtered: 3 manifests share one name \(starter\)/, block);
+  } finally { r.clean(); }
+});
+
+test("a template-something directory is scaffolding, not a module", () => {
+  const r = repo();
+  try {
+    r.file("package.json", '{"name":"root","version":"1.0.0"}');
+    r.file("src/index.js", "export const x = 1;\n");
+    // Named and public, and still not modules: a scaffold is what the path
+    // says it is. Both separators these repositories use are covered.
+    r.file("packages/template-vue/package.json", '{"name":"tmpl-vue","version":"1.0.0"}');
+    r.file("packages/template-vue/src/main.js", "export const y = 1;\n");
+    r.file("packages/template_react/package.json", '{"name":"tmpl-react","version":"1.0.0"}');
+    r.file("packages/template_react/src/main.js", "export const z = 1;\n");
+    // The separator is required, so a word that merely starts the same way is
+    // still a module. Without it the rule would be a prefix match.
+    r.file("packages/templating/package.json", '{"name":"templating","version":"1.0.0"}');
+    r.file("packages/templating/src/main.js", "export const w = 1;\n");
+    const block = r.run().split("declared modules")[1].split("\n\n")[0];
+    assert.ok(!/template-vue/.test(block), `a hyphenated scaffold is not a module: ${block}`);
+    assert.ok(!/template_react/.test(block), `an underscored scaffold is not a module: ${block}`);
+    assert.match(block, /packages\/templating/, `templating is a module, not a template: ${block}`);
+  } finally { r.clean(); }
+});
+
+test("a merged ecosystem name keeps a space between it and the path", () => {
+  const r = repo();
+  try {
+    // Three manifests at one path merge into one eco name wider than the
+    // column. Padding to the column alone then joins two fields into one token.
+    r.file("go.mod", "module example.com/m\n\ngo 1.21\n");
+    r.file("package.json", '{"name":"web","version":"1.0.0"}');
+    r.file("tsconfig.json", "{}");
+    r.file("alpha/a.go", "package alpha\n");
+    const row = r.run().split("\n").find((l) => /^ {2}\S+\s+\.$/.test(l));
+    assert.ok(row, `the declared row must keep its two fields apart:\n${r.run()}`);
+  } finally { r.clean(); }
+});
+
+test("a subdirectory scan filters the span to the scope and states the crossing load", { skip: !hasGo() }, () => {
+  const r = repo(); r.init();
+  try {
+    r.file("go.mod", "module example.com/m\n\ngo 1.21\n");
+    r.file("cmd/cotx/main.go", 'package main\n\nimport _ "example.com/m/internal/world"\n\nfunc main() {}\n');
+    r.file("internal/world/w.go", 'package world\n\nimport (\n\t_ "example.com/m/internal/ftk"\n\t_ "example.com/m/internal/world/store"\n)\n');
+    r.file("internal/world/store/s.go", "package store\n");
+    r.file("internal/ftk/f.go", "package ftk\n");
+    r.commit("2024-01-01T00:00:00");
+    const out = execFileSync("node", [CLI, join(r.dir, "internal", "world"), "--since", "20.years"],
+      { encoding: "utf8", env: ENV, stdio: ["ignore", "pipe", "pipe"] });
+    const l = line(out, "dependencies");
+    // The module is measured whole — an analyzer rooted at the subdirectory
+    // finds no go.mod — and presented at the scope that was asked for.
+    assert.match(l, /1 edges over 2 packages/, `the span must be confined to the scope: ${l}\n${out}`);
+    const b = line(out, "crossings");
+    assert.ok(b, `a confined span must state what crosses the line:\n${out}`);
+    assert.match(b, /1 inbound from outside internal\/world \(top: cmd\/cotx\)/, b);
+    assert.match(b, /1 outbound \(top: internal\/ftk\)/, b);
+  } finally { r.clean(); }
+});
+
+test("a scope holding none of the declared ecosystem says so", { skip: !hasGo() }, () => {
+  const r = repo(); r.init();
+  try {
+    r.file("go.mod", "module example.com/m\n\ngo 1.21\n");
+    r.file("alpha/a.go", 'package alpha\n\nimport _ "example.com/m/beta"\n');
+    r.file("beta/b.go", "package beta\n");
+    r.file("tools/gen.py", "x = 1\n");
+    r.commit("2024-01-01T00:00:00");
+    const out = execFileSync("node", [CLI, join(r.dir, "tools"), "--since", "20.years"],
+      { encoding: "utf8", env: ENV, stdio: ["ignore", "pipe", "pipe"] });
+    const l = line(out, "dependencies");
+    // The module was measured and none of it is here. That is a different
+    // sentence from "no analyzer applies", and from a graph of nothing.
+    assert.match(l, /the Go graph holds no packages under tools/, l);
+    assert.ok(!/0 edges/.test(l), `an empty scope is not an empty graph: ${l}`);
+  } finally { r.clean(); }
+});
+
+test("a single-ecosystem repository keeps its unlabelled dependency line", () => {
+  const r = repo();
+  try {
+    r.file("go.mod", "module example.com/m\n\ngo 1.21\n");
+    r.file("alpha/a.go", 'package alpha\n\nimport _ "example.com/m/beta"\n');
+    r.file("beta/b.go", "package beta\n");
+    const out = r.run();
+    assert.match(out, /^dependencies {2}\S/m, `one span carries no label:\n${out}`);
+    assert.ok(!/dependencies \(/.test(out), `a label that never varies is a column of noise:\n${out}`);
+  } finally { r.clean(); }
+});
+
+test("an ecosystem this tool ships no analyzer for is named, not omitted", () => {
+  const r = repo();
+  try {
+    r.file("Cargo.toml", '[package]\nname = "t"\nversion = "0.1.0"\n');
+    r.file("src/main.rs", "fn main() {}\n");
+    const l = line(r.run(), "dependencies");
+    assert.match(l, /no analyzer shipped for Rust/, `a declared ecosystem is answered, not skipped: ${l}`);
   } finally { r.clean(); }
 });
 

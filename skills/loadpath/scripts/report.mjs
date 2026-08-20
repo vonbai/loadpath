@@ -11,7 +11,7 @@ import { median, pct, day, num, tokens } from "./scan.mjs";
 
 // ── L0: orient ───────────────────────────────────────────────────────────────
 
-export function renderL0({ files, dirs, conv, hist, mans, deps, root, since, windows }) {
+export function renderL0({ files, dirs, conv, hist, mans, filtered = [], spans, root, since, windows }) {
   const out = [];
   const fileCounts = [...dirs.values()].map((d) => d.files);
   const lineCounts = files.map((f) => f.lines);
@@ -60,14 +60,26 @@ export function renderL0({ files, dirs, conv, hist, mans, deps, root, since, win
   out.push("");
   if (mans.length) {
     out.push(`declared modules`);
-    for (const m of mans.slice(0, 8)) out.push(`  ${m.eco.padEnd(11)}${m.path || "."}`);
+    // A merged ecosystem name can be wider than the column; padEnd alone then
+    // runs the two fields together — `Node/TypeScriptpackages/create-vite` is
+    // what vite printed. One space is the floor, the column is the target.
+    for (const m of mans.slice(0, 8)) out.push(`  ${(m.eco + " ").padEnd(11)}${m.path || "."}`);
     if (mans.length > 8) out.push(`  +${mans.length - 8} more`);
   } else {
     out.push(`declared modules   none found`);
   }
+  // A drop this large decides how the section reads, so it is disclosed with
+  // its reason rather than left as a shorter list.
+  if (filtered.length) {
+    const names = [...new Set(filtered.map((f) => f.name))];
+    const which = names.length === 1
+      ? `one name (${names[0]})`
+      : `${names.length} names (${names.slice(0, 3).join(", ")}${names.length > 3 ? ", …" : ""})`;
+    out.push(`  +${filtered.length} filtered: ${filtered.length} manifests share ${which}`);
+  }
 
   out.push("");
-  out.push(renderDeps(deps, { level: 0 }));
+  out.push(renderDeps(spans));
 
   // Deviation ranking. Every row is a ratio against a figure printed above it.
   const med = median(fileCounts) || 1;
@@ -94,11 +106,17 @@ export function renderL0({ files, dirs, conv, hist, mans, deps, root, since, win
 // 3,154-directory repository. Budget is met by binary search over how many
 // rows survive, after Aider's repo map, rather than a hardcoded top-N.
 
-export function renderL1({ dirs, hist, deps, budget }) {
+export function renderL1({ dirs, hist, spans, budget }) {
+  // The spans' node sets are disjoint — each ecosystem's analyzer sees its own
+  // directories — so one layer column carries all of them, with the group
+  // numbers taken from the page rather than from any one span.
+  const groups = entangledGroups(spans);
+  const layerOf = new Map();
+  for (const s of spans) if (s.measured) for (const [n, l] of s.layerOf) layerOf.set(n, l);
   const rows = [...dirs.values()].map((d) => {
     const h = hist.available ? hist.dirs.get(d.path) : null;
-    const grp = deps && deps.measured && deps.layerOf.has(d.path)
-      ? { layer: deps.layerOf.get(d.path), group: deps.groupOf.get(d.path) } : null;
+    const grp = layerOf.has(d.path)
+      ? { layer: layerOf.get(d.path), group: groups.get(d.path) } : null;
     return {
       path: d.path || ".",
       mass: d.lines,
@@ -207,38 +225,93 @@ export function renderL2({ files, conv, hist, prefix }) {
   return out.join("\n");
 }
 
+// ── Dependencies: one line per span ──────────────────────────────────────────
+//
 // The quarantine measures; this renders it. Nothing computes and prints in
 // the same place, which is why v0.1.0's truncation could go undisclosed.
-export function renderDeps(d, { level = 0 } = {}) {
-  if (!d.measured) return `dependencies  not measured — ${d.why}`;
+//
+// A repository declaring two ecosystems gets two labelled lines, side by side
+// and never added together, because a Go package and a TypeScript file
+// directory are not the same unit. One span keeps the unlabelled line it has
+// always had: a label that never varies is a column of noise.
+
+const labelOf = (spans, s) => (spans.length > 1 ? ` (${s.eco})` : "");
+
+export function renderDeps(spans) {
+  return spans.map((s) => renderSpan(s, labelOf(spans, s))).join("\n");
+}
+
+function renderSpan(d, label) {
+  const head = `dependencies${label}`;
+  if (!d.measured) return `${head}  not measured — ${d.why}`;
+  const pad = " ".repeat(head.length + 2);
   const out = [];
   // A partial resolution is stated on the same line as the number it qualifies.
   // A reader who sees only the count will otherwise read a partial graph as the
   // whole one, which is the failure this tool exists to avoid.
-  out.push(`dependencies  ${d.edges} edges over ${d.nodes.size} ${d.nodes.size===1?d.unit:d.unitPlural}, via ${d.provenance}${d.note ? ` — ${d.note}` : ""}`);
-  out.push(`              load path is ${d.depth} layers deep; ${d.tangles.length} mutually entangled group(s)`);
-  if (level === 0) return out.join("\n");
-
-  for (const t of d.tangles.slice(0, 3)) {
-    const internal = t.reduce((s, n) => s + [...(d.out.get(n) || [])].filter((x) => t.includes(x)).length, 0);
-    out.push("");
-    out.push(`  entangled: ${t.length} ${d.unitPlural}, ${internal} internal edges`);
-    const rank = t.map((n) => ({ n, deg: [...(d.out.get(n) || [])].filter((x) => t.includes(x)).length + t.filter((m) => (d.out.get(m) || new Set()).has(n)).length }))
-      .sort((a, b) => b.deg - a.deg);
-    for (const r of rank.slice(0, 5)) out.push(`    ${String(r.deg).padStart(3)} of the group's edges   ${r.n}`);
-    if (rank.length > 5) out.push(`    +${rank.length - 5} more`);
-    out.push(`    Inside a group nothing can be built, tested, or replaced alone.`);
-  }
-  if (!d.tangles.length) {
-    out.push(`              no group found in the ${d.nodes.size} ${d.unitPlural} ${d.provenance} resolved`);
-  }
-
-  const top = [...d.fanOut.entries()].map(([n, o]) => ({ n, o, i: d.fanIn.get(n) || 0 }))
-    .filter((x) => x.o >= 3 && x.i <= 1).sort((a, b) => b.o - a.o).slice(0, 3);
-  if (top.length) {
-    out.push("");
-    out.push(`  fan-out 3 or more with fan-in 1 or less`);
-    for (const t of top) out.push(`    fan-out ${String(t.o).padStart(3)}  fan-in ${t.i}   ${t.n}`);
-  }
+  out.push(`${head}  ${d.edges} edges over ${d.nodes.size} ${d.nodes.size===1?d.unit:d.unitPlural}, via ${d.provenance}${d.note ? ` — ${d.note}` : ""}`);
+  out.push(`${pad}load path is ${d.depth} layers deep; ${d.tangles.length} mutually entangled group(s)`);
+  // What was measured is the whole module; what is shown is the scope. The
+  // edges between the two are the load this subtree carries, and dropping them
+  // silently would make a subtree look self-contained when it is not.
+  if (d.crossings) out.push(pad + renderCrossings(d.crossings));
   return out.join("\n");
+}
+
+function renderCrossings(c) {
+  const eg = (dirs) => (dirs.length ? ` (top: ${dirs.join(", ")})` : "");
+  if (!c.inbound && !c.outbound) return `crossings   no edge crosses into or out of ${c.at}`;
+  return `crossings   ${c.inbound} inbound from outside ${c.at}${eg(c.inboundTop)} · ` +
+         `${c.outbound} outbound${eg(c.outboundTop)}`;
+}
+
+// Group numbers belong to the page, not to a span: two spans each numbering
+// their own tangles from one would print two g1 rows in a table where a reader
+// cannot tell them apart.
+export function entangledGroups(spans) {
+  const all = spans.filter((s) => s.measured).flatMap((s) => s.tangles);
+  all.sort((a, b) => b.length - a.length);
+  const of = new Map();
+  all.forEach((t, i) => t.forEach((n) => of.set(n, i + 1)));
+  return of;
+}
+
+export function renderDepsDetail(spans) {
+  const groups = entangledGroups(spans);
+  const out = [];
+  for (const d of spans) {
+    if (!d.measured) continue;
+    const label = labelOf(spans, d);
+    const pad = " ".repeat(`dependencies${label}`.length + 2);
+    // Each span's detail is announced when there is more than one, so the
+    // blocks below cannot be read as one graph's.
+    if (label) { out.push(""); out.push(`dependencies${label}`); }
+    d.tangles.slice(0, 3).forEach((t, i) => {
+      const internal = t.reduce((s, n) => s + [...(d.out.get(n) || [])].filter((x) => t.includes(x)).length, 0);
+      const g = label ? ` g${groups.get(t[0])}` : "";
+      // The span's own header already opened the block; a second blank line
+      // under it buys nothing, and output is the budget this tool spends.
+      if (!(label && i === 0)) out.push("");
+      out.push(`  entangled${g}: ${t.length} ${d.unitPlural}, ${internal} internal edges`);
+      const rank = t.map((n) => ({ n, deg: [...(d.out.get(n) || [])].filter((x) => t.includes(x)).length + t.filter((m) => (d.out.get(m) || new Set()).has(n)).length }))
+        .sort((a, b) => b.deg - a.deg);
+      for (const r of rank.slice(0, 5)) out.push(`    ${String(r.deg).padStart(3)} of the group's edges   ${r.n}`);
+      if (rank.length > 5) out.push(`    +${rank.length - 5} more`);
+      out.push(`    Inside a group nothing can be built, tested, or replaced alone.`);
+    });
+    if (!d.tangles.length) {
+      // Unlabelled, this line hangs under the header it qualifies; labelled,
+      // it sits with the other blocks of its own span.
+      out.push(`${label ? "  " : pad}no group found in the ${d.nodes.size} ${d.unitPlural} ${d.provenance} resolved`);
+    }
+
+    const top = [...d.fanOut.entries()].map(([n, o]) => ({ n, o, i: d.fanIn.get(n) || 0 }))
+      .filter((x) => x.o >= 3 && x.i <= 1).sort((a, b) => b.o - a.o).slice(0, 3);
+    if (top.length) {
+      out.push("");
+      out.push(`  fan-out 3 or more with fan-in 1 or less`);
+      for (const t of top) out.push(`    fan-out ${String(t.o).padStart(3)}  fan-in ${t.i}   ${t.n}`);
+    }
+  }
+  return out.join("\n").trim();
 }

@@ -17,7 +17,7 @@ import { existsSync, statSync, realpathSync } from "node:fs";
 import { resolve, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inventory, history, manifests, submodulePaths, byDirectory, testConvention, tryGit, tokens, CHARS_PER_TOKEN } from "./scan.mjs";
-import { renderL0, renderL1, renderL2, renderCoChange, renderRelocations, renderDeps } from "./report.mjs";
+import { renderL0, renderL1, renderL2, renderCoChange, renderRelocations, renderDepsDetail } from "./report.mjs";
 import { dependencies } from "./deps.mjs";
 
 // `npx skills add` copies skills/loadpath/ and nothing else, so package.json
@@ -25,15 +25,6 @@ import { dependencies } from "./deps.mjs";
 // copy cannot say what it is, and output pasted into an issue carries no
 // provenance. tests/contract.mjs holds it equal to package.json.
 const VERSION = "0.2.2";
-
-function commonAncestor(paths) {
-  if (!paths.length) return "";
-  const parts = paths.map((p) => (p ? p.split("/") : []));
-  const first = parts[0];
-  let i = 0;
-  while (i < first.length && parts.every((p) => p[i] === first[i])) i++;
-  return first.slice(0, i).join("/");
-}
 
 function parse(argv) {
   const o = { repo: ".", since: "12.months", budget: 1600, windows: 4, cap: 30, top: 12, dir: null, structure: false };
@@ -110,27 +101,33 @@ function main() {
   const conv = testConvention(files);
   const dirs = byDirectory(files, conv.isTest);
   const hist = history(root, { since: o.since, windows: o.windows, breadthCap: o.cap, prefix });
-  const mans = manifests(root).filter((m) => !prefix || m.path.startsWith(prefix));
+  // A subtree inside a module still belongs to that module, so the manifest
+  // above the scope is kept beside the ones inside it. Both are what the
+  // reader is told is declared, and both are what the analyzers are rooted at.
+  const under = (p, q) => q === "" || p === q || p.startsWith(q + "/");
+  const inScope = (m) => under(m.path, prefix) || under(prefix, m.path);
+  const declared = manifests(root);
+  const mans = declared.modules.filter(inScope);
+  // What the scan dropped as copies, scoped the same way: a drop outside the
+  // scope is not this reader's news.
+  const filtered = declared.filtered.filter(inScope);
 
   if (o.dir) {
     console.log(renderL2({ files, conv, hist, prefix: o.dir.replace(/\/$/, "") }));
     return;
   }
 
-  // An analyzer is rooted at the common ancestor of the manifests, not where
-  // .git is and not at whichever manifest sorts first. A module inside a
-  // repository was never measured while the root was the git toplevel; and
-  // descending to one manifest among siblings would show one project's edges
-  // and call them the repository's.
-  const analyzerRoot = resolve(root, commonAncestor(mans.map((m) => m.path)) || prefix);
-  const deps = dependencies(analyzerRoot, { files });
+  // Where each analyzer is rooted is the quarantine's decision, not this
+  // file's: one root for the whole repository is what made a Go backend beside
+  // a Node frontend report that no analyzer applied to either.
+  const spans = dependencies(root, { files, mans, prefix });
 
   const parts = [];
   parts.push(root + (prefix ? "/" + prefix : ""));
   if (scopeNote) parts.push(scopeNote);
   parts.push("");
   // The whole result, not a pre-rendered line: the entry point does not format.
-  parts.push(renderL0({ files, dirs, conv, hist, mans, deps, root, since: o.since, windows: o.windows }));
+  parts.push(renderL0({ files, dirs, conv, hist, mans, filtered, spans, root, since: o.since, windows: o.windows }));
 
   const reloc = renderRelocations(hist);
   if (reloc) { parts.push(""); parts.push(reloc); }
@@ -141,12 +138,10 @@ function main() {
   if (o.structure) {
     parts.push("");
     parts.push("structure   every directory, largest first");
-    parts.push(renderL1({ dirs, hist, deps, budget: o.budget }));
-    // The two header lines already appeared in L0; only the detail is new.
-    if (deps.measured) {
-      const detail = renderDeps(deps, { level: 1 }).split("\n").slice(2).join("\n").trim();
-      if (detail) { parts.push(""); parts.push(detail); }
-    }
+    parts.push(renderL1({ dirs, hist, spans, budget: o.budget }));
+    // Each span's header line already appeared in L0; only the detail is new.
+    const detail = renderDepsDetail(spans);
+    if (detail) { parts.push(""); parts.push(detail); }
   }
 
   parts.push("");

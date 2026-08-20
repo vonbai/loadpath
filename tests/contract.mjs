@@ -111,6 +111,7 @@ const ADR_EVIDENCE = {
   "0009": /"--name-status"/,
   "0011": /e\.topShare = shares\[0\]/,
   "0012": /of \$\{p\.base\}c/,
+  "0013": /const FAMILIES = \[/,      // one span per ecosystem, rooted at its own manifests
 };
 for (const f of readdirSync(join(ROOT, "docs", "adr"))) {
   const n = f.slice(0, 4);

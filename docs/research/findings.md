@@ -220,6 +220,16 @@ The filter that works: require `name` present **and** `private` absent (298 → 
 
 **Ecosystem trap: vite's root `package.json` has no `workspaces` field at all** — it is pnpm-only, so a tool reading only that field misses every pnpm monorepo.
 
+**Re-measured at vite `de1111ab0be00879b404e7ed3b2a80e264edddc1`, fetched 2026-08-20**, when the private-package rule was refined, and again when the duplicate-name collapse was added. The repository now holds 296 `package.json` outside `node_modules`, and 273 of them are excluded by the shipped path filter, most under `playground/`. The original two steps reproduce: 18 are named and public, and **3 survive both filters** — the three real architectural modules. **The refinement does not hold that number.** Keeping a private `package.json` that carries a `workspaces` field, or its own `src/`, `lib/`, `app/` or `web/` directory, raises the kept count from 3 to 19, and the declared-module list across every ecosystem from 14 paths to 22.
+
+All 16 additions are `packages/create-vite/template-*`: private, each with a `src/`. A scaffold and an application are the same shape, and only the path tells them apart.
+
+**The duplicate-name collapse returns 2 of the 16, not 16.** Two packages cannot carry one name, so a name on more than one kept manifest is a copy and every copy is dropped — but measured here, the 16 scaffolds carry **15 distinct names**, and only `template-qwik` and `template-qwik-ts` collide (both `vite-qwik`). The kept count goes 19 → 17 and declared paths 22 → 21. The rule is sound and it fires on real copies; it is simply not what makes these templates noise.
+
+**What separates them is measured to be the path**, and that is what closed it. Of the 17 manifests kept after the collapse, 14 sat in a `template-*` directory. The exclusion list already held a `template/` or `templates/` path *segment*; vite spells its scaffolds `template-vanilla`, so the rule never fired. Admitting the hyphenated spelling — `template` followed by `-`, `_` or `.` and the rest of the segment — takes vite's declared list to **6 paths**: `packages/vite`, `packages/plugin-legacy` and `packages/create-vite`, the three modules this finding named, plus the root pnpm workspace and the `docs/` and `scripts/` tsconfigs. The separator is required, so `templating/` still declares a module: the extension admits the measured spelling, not a prefix.
+
+**The principle, so the list cannot grow by anticipation: a scaffold spelling enters the filter when a real repository demonstrates it, and the demonstration is recorded here with its count.** `template-*` is in because vite keeps sixteen of them. `starter-*` and `example-*` are not, because nothing measured has shown them. The name collapse is not made redundant by this — it catches copies sharing a name wherever they sit, which a path rule cannot see — but at vite it now has nothing left to drop, because the path filter reaches those two first.
+
 **The gold tier is the six declarations that give exact intra-repo *edges*, not just boundaries**: `.csproj ProjectReference` (~2.5 M public occurrences), `tsconfig references` (~993 k), Cargo path dependencies, Gradle `project(':x')`, Maven modules, Bazel `deps`. Since source-derived edges are quarantined as inexact, this is the one place an exact edge is available for free.
 
 ### Presentation format

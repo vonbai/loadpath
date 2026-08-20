@@ -94,7 +94,7 @@ Four arXiv papers, read in isolation, behind the co-change scoring in `scripts/s
 
 ### Where the edges come from
 
-`scripts/deps.mjs` does not parse imports. It runs the ecosystem's own analyzer — `go list`, `grimp`, `madge`, or `.csproj` XML — names it in the output, and reports **Not measured** where none applies.
+`scripts/deps.mjs` does not parse imports. It runs each declared ecosystem's own analyzer — `go list`, `grimp`, `madge`, or `.csproj` XML — at that ecosystem's own root, names it in the output, and returns one graph per ecosystem. The graphs stand side by side and are never added together, because their units differ; an ecosystem that cannot be measured here is a **named absence**.
 
 The alternative was tried and published, and it failed in both directions. Substring matching of directory paths measured 94.3% precision at one repository root and **43.5% one directory down**, where short names like `io`, `db` and `work` match ordinary English prose in comments. Recall was worse: on standard TypeScript and Python layouts it returned nothing at all on textbook cycles, because relative imports and dotted package names never contain a repo-relative directory path. On the one Go module it was validated against it reported fourteen cycles where the compiler makes cycles impossible.
 

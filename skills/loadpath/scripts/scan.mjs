@@ -73,6 +73,11 @@ const MANIFESTS = [
   { suffix: ".csproj", eco: "C#" },
 ];
 
+// The directories an application keeps its own source in. A private
+// package.json beside one of these is a module the repository builds, not a
+// workspace glob's fixture.
+const APP_DIR = new Set(["src", "lib", "app", "web"]);
+
 // ── Small helpers ────────────────────────────────────────────────────────────
 
 const median = (xs) => {
@@ -406,7 +411,7 @@ function coChange(commits, windows, cap) {
 // ── Manifests — exact, declared rather than inferred ─────────────────────────
 
 function manifests(root) {
-  const found = [];
+  const hits = [];
   const walk = (abs, depth) => {
     if (depth > 3) return;
     let entries;
@@ -421,27 +426,57 @@ function manifests(root) {
           const rel = relative(root, join(abs, e.name)).split(sep).join("/");
           // A workspace glob is not a module boundary: on one real repository
           // it matched 297 of 299 package.json files where the modules number
-          // three. Named-and-public is the filter that separates them.
-          let keep = true;
+          // three. Named-and-public separates them — but it also erased every
+          // application, because `private: true` is npm's own flag for "do not
+          // publish this", which is exactly what an application says. Three
+          // shapes are declarations: a published package, a workspace root,
+          // and a private package that keeps its own source directory.
+          let keep = true, name = "";
           if (e.name === "package.json") {
             try {
               const j = JSON.parse(readAll(join(abs, e.name)));
-              keep = Boolean(j.name) && !j.private;
+              name = typeof j.name === "string" ? j.name : "";
+              keep = (Boolean(j.name) && !j.private)
+                || (Boolean(j.private) && Boolean(j.workspaces))
+                || (Boolean(j.private) && entries.some((x) => x.isDirectory() && APP_DIR.has(x.name)));
             } catch { keep = false; }
           }
-          if (/(^|\/)(__tests__|fixtures?|playground|examples?|testdata|templates?)\//.test(rel)) keep = false;
-          if (keep) {
-            const at = dirname(rel) === "." ? "" : dirname(rel);
-            const prior = found.find((x) => x.path === at);
-            if (prior) prior.eco = [...new Set([...prior.eco.split("/"), hit.eco])].join("/");
-            else found.push({ path: at, eco: hit.eco, file: e.name });
-          }
+          // `template-vanilla` is the spelling scaffolds actually use: vite
+          // keeps sixteen of them, each privately named and each with its own
+          // src/, and every rule that reads the file alone admits them. A
+          // `templates?/` segment was already excluded, so the hyphenated form
+          // adds the measured spelling rather than a new class — `templating`
+          // still declares a module, because the separator is required. A
+          // scaffold spelling enters this list when a real repository shows it,
+          // never in anticipation; docs/research/findings.md carries the count.
+          if (/(^|\/)(__tests__|fixtures?|playground|examples?|testdata|templates?|template[-_.][^/]*)\//.test(rel)) keep = false;
+          if (keep) hits.push({ path: dirname(rel) === "." ? "" : dirname(rel), eco: hit.eco, file: e.name, name });
         }
       }
     }
   };
   walk(root, 0);
-  return found;
+
+  // Two packages cannot carry one name — no registry would accept the
+  // collision — so a name on more than one manifest is a copy of a scaffold
+  // rather than a module, and every copy goes, including the first. This runs
+  // after the rules above rather than inside them: whether a package.json
+  // declares a module is a property of that file, and whether it is a copy is
+  // a property of the set. The count and the name it shares are returned so
+  // the reader learns what left, and why.
+  const seen = new Map();
+  for (const h of hits) if (h.name) seen.set(h.name, (seen.get(h.name) || 0) + 1);
+  const shared = new Set([...seen].filter(([, n]) => n > 1).map(([n]) => n));
+  const copies = (h) => Boolean(h.name) && shared.has(h.name);
+
+  const modules = [];
+  for (const h of hits) {
+    if (copies(h)) continue;
+    const prior = modules.find((x) => x.path === h.path);
+    if (prior) prior.eco = [...new Set([...prior.eco.split("/"), h.eco])].join("/");
+    else modules.push({ path: h.path, eco: h.eco, file: h.file });
+  }
+  return { modules, filtered: hits.filter(copies).map((h) => ({ path: h.path, name: h.name })) };
 }
 
 function readAll(abs) {

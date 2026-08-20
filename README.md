@@ -18,7 +18,7 @@ One command, 813–1,493 tokens across the three pinned corpora (36 to 1,093 sou
 - **commit share** — the top author's fraction of a directory's commits, beside the raw count.
 - **relocations** — what this repository has already moved, from git's rename records. The migration already done is usually the best evidence of the one in progress.
 - **co-change** — directories changing in the same commits, one commit casting one vote split across the pairs it implies, with the vote it received in every window and the denominator its share is taken over.
-- **dependencies** — from the ecosystem's own analyzer, named in the output. Entanglement as *groups*, and how many layers deep the load path runs.
+- **dependencies** — from the ecosystem's own analyzer, named in the output, one graph per ecosystem the repository declares. Entanglement as *groups*, and how many layers deep the load path runs.
 
 `--structure` adds every directory and the entangled groups. `--dir PATH` gives one subtree file by file.
 
@@ -36,7 +36,7 @@ Three consequences run through the output:
 
 ## Dependencies: analyzers, never guesses
 
-Loadpath does not parse imports. It runs the ecosystem's own analyzer and names it in the output, or reports Not measured.
+Loadpath does not parse imports. It runs the ecosystem's own analyzer and names it in the output, or reports Not measured. Measurement is **per ecosystem, side by side**: a repository declaring two of these gets two labelled graphs, each rooted where that ecosystem's manifests are, never merged into one — their units differ — and never one standing for the other.
 
 | Ecosystem | Analyzer | Granularity | Needs |
 |---|---|---|---|
@@ -44,7 +44,7 @@ Loadpath does not parse imports. It runs the ecosystem's own analyzer and names 
 | C# | `.csproj` `<ProjectReference>` | project | nothing |
 | Python | `grimp` | module directory | `pip install grimp` |
 | Node/TS | `madge` | file directory | a warm npx cache |
-| anything else | — | — | reported as Not measured |
+| anything else | — | — | named as an absence, never omitted |
 
 Calling a real analyzer is not the same as trusting it: the dominant failure mode of the Node tools is silent empty output, so every result passes a sanity check before it is believed, and a failed check reports Not measured rather than zero.
 
@@ -68,14 +68,14 @@ node ~/.agents/skills/loadpath/scripts/loadpath.mjs /path/to/repo
 
 Everything published here is recomputed by the repository itself.
 
-- `node --test tests/loadpath.test.mjs` — 68 acceptance tests over synthetic repositories built per case.
-- `node tests/mutate.mjs` — 59 one-line feature deletions; **a surviving mutant fails the build.** v0.1.0's suite let 14 of 20 pass, including the line that broke its own headline claim. Three are marked *equivalent* — a second guard already produces the same observable, so they are asserted to survive and a kill means the stated proof went stale — and five are listed every run as *not exercised*, with the toolchain each would need. The number is never the claim; the list is.
+- `node --test tests/loadpath.test.mjs` — 80 acceptance tests over synthetic repositories built per case.
+- `node tests/mutate.mjs` — 70 one-line feature deletions; **a surviving mutant fails the build.** v0.1.0's suite let 14 of 20 pass, including the line that broke its own headline claim. Three are marked *equivalent* — a second guard already produces the same observable, so they are asserted to survive and a kill means the stated proof went stale — and five are listed every run as *not exercised*, with the toolchain each would need. The number is never the claim; the list is.
 - `node tests/measure.mjs` — every published figure recomputed from three pinned public repositories and compared against `tests/measure-baseline.json`. A pin that does not resolve fails the run.
 - `node tests/contract.mjs` — the skill's frontmatter, budget, pointers and vocabulary.
 
 ## Evidence
 
-`DESIGN.md` holds the principles and the module design; `docs/adr/` records twelve decisions and what each traded away; `docs/research/findings.md` records what the research supports, what it rules out, and what nothing supports — including three measurements this tool emits with no predictive validation, said plainly rather than quietly kept.
+`DESIGN.md` holds the principles and the module design; `docs/adr/` records thirteen decisions and what each traded away; `docs/research/findings.md` records what the research supports, what it rules out, and what nothing supports — including three measurements this tool emits with no predictive validation, said plainly rather than quietly kept.
 
 ## License
 

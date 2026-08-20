@@ -3,8 +3,12 @@
 // here, alone, so a reader can tell a number's trustworthiness from which file
 // produced it.
 //
-// This module never guesses at imports. It runs the ecosystem's own analyzer or
-// it reports Not measured. Guessing was tried: substring matching of directory
+// This module never guesses at imports. It runs each declared ecosystem's own
+// analyzer, at that ecosystem's own root, and returns one span per ecosystem —
+// a measured graph or a named absence, never a merged graph and never the
+// first answer standing for the rest.
+//
+// Guessing was tried: substring matching of directory
 // paths scored 94% precision at one repository root and 43% one directory down,
 // and reported fourteen cycles in a Go module where the compiler makes them
 // impossible. See docs/adr/0003.
@@ -15,7 +19,7 @@
 
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname, relative, sep, extname } from "node:path";
+import { join, dirname, relative, resolve, sep, extname } from "node:path";
 import { execFileSync } from "node:child_process";
 
 const run = (cmd, args, cwd, ms = 60000, env = {}) => {
@@ -61,8 +65,14 @@ function goModules(root) {
 }
 
 function goAnalyzer(root) {
-  if (!existsSync(join(root, "go.mod")) || !has("go", ["version"])) return null;
   const mods = goModules(root);
+  if (!mods.length) return null;
+  // A toolchain that is not installed is not the absence of a Go repository,
+  // and returning the same null for both said the second about the first. The
+  // module count is what the reader loses, so it is what the sentence names.
+  if (!has("go", ["version"])) {
+    return { absent: `go is not on PATH, so ${mods.length} Go module${mods.length === 1 ? " was" : "s were"} not analysed` };
+  }
   const edges = new Set(); const nodes = new Set();
   let firstWhy = null, reached = 0;
   for (const dir of mods) {
@@ -208,7 +218,12 @@ print(json.dumps({"edges": out}))`;
 function nodeAnalyzer(root) {
   if (!existsSync(join(root, "package.json"))) return null;
   const srcDir = ["src", "lib", "packages", "app"].find((d) => existsSync(join(root, d)));
-  if (!srcDir) return null;
+  // Present and unreadable is a different fact from not present: madge is
+  // pointed at a directory, and there is none here to point it at. The sentence
+  // states the file and the missing directory rather than calling the file a
+  // declaration — whether a package.json declares a module is the manifest
+  // scan's judgement, and it is made elsewhere.
+  if (!srcDir) return { absent: "a package.json sits here with none of src/, lib/, packages/ or app/ beside it for madge to read" };
   const args = ["--yes", "--offline", "madge", "--json", "--extensions", "ts,tsx,js,jsx,mjs"];
   if (existsSync(join(root, "tsconfig.json"))) args.push("--ts-config", "./tsconfig.json");
   args.push(srcDir);
@@ -233,7 +248,56 @@ function nodeAnalyzer(root) {
   return { provenance: "madge", edges, nodes, unit: "file directory", unitPlural: "file directories", scope: srcDir };
 }
 
-const ANALYZERS = [goAnalyzer, csprojAnalyzer, pythonAnalyzer, nodeAnalyzer];
+// ── Ecosystem families ───────────────────────────────────────────────────────
+//
+// One ecosystem, one analyzer, one span. A repository declaring Go and Node
+// holds two dependency graphs and no third one that merges them: `go list`
+// counts packages and madge counts file directories, so their sum has no unit.
+// Trying the analyzers in order and keeping the first that answered was worse
+// than that — it printed one ecosystem's graph as the repository's, and on a
+// split tree it printed "no analyzer applies" directly underneath the two
+// ecosystems the same page had just declared. See docs/adr/0013.
+
+const FAMILIES = [
+  { eco: "Go", ecos: ["Go"], run: goAnalyzer },
+  { eco: "C#", ecos: ["C#"], run: csprojAnalyzer },
+  { eco: "Python", ecos: ["Python"], run: pythonAnalyzer },
+  // madge reads TypeScript and JavaScript through one tsconfig, so a
+  // package.json, a workspace file and a tsconfig.json are one family.
+  { eco: "Node", ecos: ["Node", "TypeScript"], run: nodeAnalyzer },
+];
+
+// An analyzer is rooted at the common ancestor of its OWN ecosystem's
+// manifests. The ancestor of every manifest is a different directory: with
+// backend/go.mod beside frontend/package.json it is the repository root, where
+// neither analyzer finds anything to read.
+function commonAncestor(paths) {
+  if (!paths.length) return "";
+  const parts = paths.map((p) => (p ? p.split("/") : []));
+  const first = parts[0];
+  let i = 0;
+  while (i < first.length && parts.every((p) => p[i] === first[i])) i++;
+  return first.slice(0, i).join("/");
+}
+
+function families(mans) {
+  const byEco = new Map();
+  for (const m of mans) {
+    for (const eco of m.eco.split("/")) {
+      if (!byEco.has(eco)) byEco.set(eco, []);
+      byEco.get(eco).push(m.path);
+    }
+  }
+  // Every family is offered the repository, because a manifest scan that stops
+  // three directories down does not see a .csproj eight directories down. A
+  // family no manifest declared becomes a span only if its analyzer finds its
+  // ecosystem there; a declared one becomes a span either way.
+  const out = FAMILIES.map((f) => ({ eco: f.eco, run: f.run, paths: f.ecos.flatMap((e) => byEco.get(e) ?? []) }));
+  for (const eco of [...byEco.keys()].sort()) {
+    if (!FAMILIES.some((f) => f.ecos.includes(eco))) out.push({ eco, run: null, paths: byEco.get(eco) });
+  }
+  return out;
+}
 
 // ── Graph structure ──────────────────────────────────────────────────────────
 //
@@ -305,57 +369,118 @@ export function layers(comps, out) {
 
 // ── Entry point ──────────────────────────────────────────────────────────────
 
-export function dependencies(root, { files }) {
-  for (const a of ANALYZERS) {
-    let r; try { r = a(root); } catch (e) { r = { provenance: a.name, edges: null, why: String(e.message).slice(0, 160) }; }
-    if (!r) continue;
-    if (!r.edges) return notMeasured(`${r.provenance} could not run — ${r.why}`);
-
-    // Calling a real analyzer is not trusting it. An empty or absurdly small
-    // graph over a large tree is the documented silent-failure shape.
-    // Coverage against what the analyzer was pointed at. Judging madge on
-    // `src/` by the size of a tree that also holds tests, docs and tooling
-    // would reject a correct graph for looking at the thing it was given.
-    const scope = r.scope || "";
-    const inScope = files.filter((f) => !scope || f.dir === scope || f.dir.startsWith(scope + "/"));
-    const dirCount = new Set(inScope.map((f) => f.dir)).size;
-    const where = scope ? `${scope}/` : "the tree";
-    if (r.edges.size === 0) return notMeasured(`${r.provenance} resolved no edges over ${dirCount} directories in ${where}; treat as not measured, not as no dependencies`);
-    // Proportional, not a constant. A graph covering a twentieth of the tree
-    // is not a small graph, it is a failed one — and a fixed floor of three
-    // let exactly that through while the message implied otherwise.
-    const covered = r.nodes.size / Math.max(dirCount, 1);
-    if (r.nodes.size < 2 || covered < 0.2) {
-      return notMeasured(`${r.provenance} resolved ${r.nodes.size} nodes over ${dirCount} source directories in ${where} (${Math.round(covered * 100)}%); too little of it to read as a dependency graph`);
-    }
-
-    const out = new Map();
-    for (const e of r.edges) { const [a2, b] = e.split("\0"); if (!out.has(a2)) out.set(a2, new Set()); out.get(a2).add(b); }
-    const comps = tarjan([...r.nodes], out);
-    const tangles = comps.filter((c) => c.length > 1).sort((a, b) => b.length - a.length);
-    const { level } = layers(comps, out);
-    const depth = Math.max(0, ...level) + 1;
-
-    const fanIn = new Map(), fanOut = new Map();
-    for (const [a2, tos] of out) { fanOut.set(a2, tos.size); for (const b of tos) fanIn.set(b, (fanIn.get(b) || 0) + 1); }
-
-    // Layer and group travel with each node, so a reader never has to join two
-    // sections to learn whether a directory is inside a tangle.
-    const layerOf = new Map(), groupOf = new Map();
-    comps.forEach((c, i) => c.forEach((n) => {
-      layerOf.set(n, level[i]);
-      if (c.length > 1) groupOf.set(n, tangles.indexOf(c) + 1);
-    }));
-
-    return { measured: true, provenance: r.provenance, unit: r.unit, unitPlural: r.unitPlural || r.unit + "s",
-             note: r.note || "", scope, out, nodes: r.nodes, edges: r.edges.size, comps, tangles, level, depth, fanIn, fanOut, layerOf, groupOf };
+// One span per ecosystem the manifests declare, in a fixed order, each one
+// either a measured graph or a named absence. Never a merged graph, never a
+// winner, never silence about an ecosystem this page has already named.
+export function dependencies(root, { files, mans = [], prefix = "" }) {
+  const spans = [];
+  for (const fam of families(mans)) {
+    const one = span(root, fam, { files, prefix });
+    if (!one) continue;
+    spans.push(one);
   }
-  return notMeasured("no analyzer applies to this repository — dependency edges are not guessed here");
+  // Nothing declared and nothing recognised: still one absence, because the
+  // dependency axis must never render as blank.
+  if (!spans.length) spans.push(notMeasured("", "no analyzer applies to this repository — dependency edges are not guessed here"));
+  return spans;
+}
+
+const rebase = (n, at) => (!at ? n : n === "." ? at : `${at}/${n}`);
+const sum = (m) => [...m.values()].reduce((a, b) => a + b, 0);
+// Most-loaded first, and a handful: these are examples a reader follows, not
+// an edge list. Which ones are worth printing is Report's decision.
+const busiest = (m) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([n]) => n);
+
+function span(root, fam, { files, prefix }) {
+  if (!fam.run) return notMeasured(fam.eco, `no analyzer shipped for ${fam.eco}; edges are not guessed here`);
+  const at = commonAncestor(fam.paths);
+  let r;
+  try { r = fam.run(resolve(root, at)); }
+  catch (e) { r = { absent: `the ${fam.eco} analyzer raised — ${String(e.message).slice(0, 160)}` }; }
+  // null is reserved for "this ecosystem is not here". A manifest said it is,
+  // so the reader gets a sentence rather than a missing line.
+  const n = fam.paths.length;
+  if (!r) return n
+    ? notMeasured(fam.eco, `${n} ${fam.eco} manifest${n === 1 ? " declares" : "s declare"} this ecosystem and no project was found at ${at ? at + "/" : "the repository root"}`)
+    : null;
+  if (r.absent) return notMeasured(fam.eco, r.absent);
+  if (!r.edges) return notMeasured(fam.eco, `${r.provenance} could not run — ${r.why}`);
+
+  // Every module speaks repository-relative paths. An analyzer rooted in a
+  // subdirectory names its nodes relative to that subdirectory, and a graph in
+  // a second coordinate system joins to neither the directory table nor the
+  // scope the reader asked for.
+  const nodes = new Set([...r.nodes].map((n) => rebase(n, at)));
+  const edges = new Set([...r.edges].map((e) => e.split("\0").map((n) => rebase(n, at)).join("\0")));
+
+  // Calling a real analyzer is not trusting it. An empty or absurdly small
+  // graph over a large tree is the documented silent-failure shape.
+  // Coverage against what the analyzer was pointed at. Judging madge on
+  // `src/` by the size of a tree that also holds tests, docs and tooling
+  // would reject a correct graph for looking at the thing it was given.
+  const scope = [at, r.scope].filter(Boolean).join("/");
+  const inScope = files.filter((f) => !scope || f.dir === scope || f.dir.startsWith(scope + "/"));
+  const dirCount = new Set(inScope.map((f) => f.dir)).size;
+  const where = scope ? `${scope}/` : "the tree";
+  if (r.edges.size === 0) return notMeasured(fam.eco, `${r.provenance} resolved no edges over ${dirCount} directories in ${where}; treat as not measured, not as no dependencies`);
+  // Proportional, not a constant. A graph covering a twentieth of the tree
+  // is not a small graph, it is a failed one — and a fixed floor of three
+  // let exactly that through while the message implied otherwise.
+  const covered = r.nodes.size / Math.max(dirCount, 1);
+  if (r.nodes.size < 2 || covered < 0.2) {
+    return notMeasured(fam.eco, `${r.provenance} resolved ${r.nodes.size} nodes over ${dirCount} source directories in ${where} (${Math.round(covered * 100)}%); too little of it to read as a dependency graph`);
+  }
+
+  // The gate above judged the analyzer on what it was pointed at; this judges
+  // nothing. A subdirectory scan is measured from the module's own root and
+  // presented at the reader's scope, because an analyzer rooted at the
+  // subdirectory loses exactly the edges the reader is asking about — every
+  // import that crosses into it — and on a Go repository finds no go.mod at
+  // all. What crosses the line is reported as load, not dropped in silence.
+  const inside = (n) => !prefix || n === prefix || n.startsWith(prefix + "/");
+  const kept = new Set([...nodes].filter(inside));
+  const within = new Set(); const inbound = new Map(); const outbound = new Map();
+  for (const e of edges) {
+    const [a, b] = e.split("\0");
+    if (inside(a) && inside(b)) within.add(e);
+    else if (inside(b)) inbound.set(a, (inbound.get(a) || 0) + 1);
+    else if (inside(a)) outbound.set(b, (outbound.get(b) || 0) + 1);
+  }
+  // A scope that holds none of this ecosystem is an absence only where the
+  // manifests in scope named it. Where they did not, the reader scoped away
+  // from an ecosystem rather than failing to measure one, and a line saying so
+  // is noise on every subdirectory of a polyglot repository.
+  const unitPlural = r.unitPlural || r.unit + "s";
+  if (!kept.size) return fam.paths.length ? notMeasured(fam.eco, `the ${fam.eco} graph holds no ${unitPlural} under ${prefix}`) : null;
+  const crossings = prefix
+    ? { at: prefix, inbound: sum(inbound), outbound: sum(outbound), inboundTop: busiest(inbound), outboundTop: busiest(outbound) }
+    : null;
+
+  const out = new Map();
+  for (const e of within) { const [a2, b] = e.split("\0"); if (!out.has(a2)) out.set(a2, new Set()); out.get(a2).add(b); }
+  const comps = tarjan([...kept], out);
+  const tangles = comps.filter((c) => c.length > 1).sort((a, b) => b.length - a.length);
+  const { level } = layers(comps, out);
+  const depth = Math.max(0, ...level) + 1;
+
+  const fanIn = new Map(), fanOut = new Map();
+  for (const [a2, tos] of out) { fanOut.set(a2, tos.size); for (const b of tos) fanIn.set(b, (fanIn.get(b) || 0) + 1); }
+
+  // Layer and group travel with each node, so a reader never has to join two
+  // sections to learn whether a directory is inside a tangle.
+  const layerOf = new Map(), groupOf = new Map();
+  comps.forEach((c, i) => c.forEach((n) => {
+    layerOf.set(n, level[i]);
+    if (c.length > 1) groupOf.set(n, tangles.indexOf(c) + 1);
+  }));
+
+  return { eco: fam.eco, measured: true, provenance: r.provenance, unit: r.unit, unitPlural,
+           note: r.note || "", scope, out, nodes: kept, edges: within.size, comps, tangles, level, depth, fanIn, fanOut, layerOf, groupOf, crossings };
 }
 
 // A reason is data, exactly as History's `unavailable` is. Composing the
 // sentence a reader sees is Report's job, and this module does not do it —
 // see DESIGN.md, "Measure ↔ render".
-function notMeasured(why) {
-  return { measured: false, why };
+function notMeasured(eco, why) {
+  return { eco, measured: false, why };
 }

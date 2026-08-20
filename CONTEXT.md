@@ -36,6 +36,10 @@ _Avoid_: coupling, temporal coupling, change coupling
 One directory needing another to compile or run. Measured by a native analyzer, or Not measured.
 _Avoid_: coupling, boundary, reference
 
+**Span**:
+One ecosystem's dependency graph, measured by that ecosystem's own analyzer at that ecosystem's own root. A repository has as many spans as it declares ecosystems; spans are reported side by side and never merged, because their units differ. A span that cannot be measured is a named absence, never silence.
+_Avoid_: the dependency graph, analyzer pass, ecosystem view
+
 **Load path**:
 The direction dependency runs through a codebase — each directory bears the weight of everything that imports it. The reading that gives the project its name.
 _Avoid_: dependency chain, call graph

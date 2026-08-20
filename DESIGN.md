@@ -55,7 +55,7 @@ Four modules, three seams. The arrangement exists to contain one specific failur
 
 **History** — reads git and returns exact per-path commit facts and co-change. Hides git invocation, NUL-safe parsing, quote-escaped and non-ASCII paths, object-format width, shallow-clone detection, window bucketing, and vote weighting. `unavailable` is a first-class return value, never a printed sentence.
 
-**Dependencies** — the only module permitted to be inexact. Hides which external analyzer to try, how to parse it, and how to label provenance. Returns `NotMeasured` rather than a number when no analyzer applies.
+**Dependencies** — the only module permitted to be inexact. Hides which external analyzer to try, **where to root it**, how to parse it, and how to label provenance. Returns one **span** per declared ecosystem — that ecosystem's own graph, measured by its own analyzer at the common ancestor of its own manifests — and a named absence rather than a number wherever a graph cannot be had. Spans are never merged: `go list` counts packages and madge counts file directories, so their sum has no unit. The entry point no longer chooses a root, because one root for the whole repository is what made a Go backend beside a Node frontend report that no analyzer applied to either. See `docs/adr/0013`.
 
 **Report** — renders facts at a requested depth. Hides formatting, alignment, truncation, and the token budget. No other module prints — including the quarantine, which returns a reason as data and never the sentence a reader sees. `tests/loadpath.test.mjs` holds it to that: `deps.mjs` may not contain a padding or logging call.
 
@@ -89,7 +89,7 @@ Disclosure is an algorithm, not a flag. Each module discloses in three layers, a
 |---|---|---|---|
 | **Inventory** | robust distribution summary plus deviation ranking, O(F log F) | flat table ordered by mass, binary-searched to a token budget, O(V log V) | file level for one named subtree, O(F_subtree) |
 | **History** | age, commit count, active/dormant split, O(C) | weighted co-change with breadth cap and time windows, O(Σ min(k,cap)²) | not built |
-| **Dependency** | which analyzer ran, layers deep, entangled group count — or Not measured, O(V+E) | entangled groups with their anchors, and each directory's layer and group carried on its own row, O(V+E) | not built; an edge list would contradict the rule above it |
+| **Dependency** | per declared ecosystem: which analyzer ran, layers deep, entangled group count — or a named absence, O(V+E) | entangled groups with their anchors, and each directory's layer and group carried on its own row, O(V+E) | not built; an edge list would contradict the rule above it |
 
 **L0 is the norms and the outliers. L1 is the structure. L2 is the detail.** Inventory's L0 summarises a distribution and ranks by deviation from it; History's and Dependency's L0 report totals and could do the same, which is the clearest unclaimed improvement in the tool.
 
