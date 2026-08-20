@@ -11,7 +11,7 @@ import { median, pct, day, num, tokens } from "./scan.mjs";
 
 // ── L0: orient ───────────────────────────────────────────────────────────────
 
-export function renderL0({ files, dirs, conv, hist, mans, filtered = [], spans, root, since, windows }) {
+export function renderL0({ files, dirs, conv, hist, mans, filtered = [], spans, scattered = [], root, since, windows }) {
   const out = [];
   const fileCounts = [...dirs.values()].map((d) => d.files);
   const lineCounts = files.map((f) => f.lines);
@@ -35,6 +35,13 @@ export function renderL0({ files, dirs, conv, hist, mans, filtered = [], spans, 
   out.push("");
   out.push(`files per directory   median ${median(fileCounts)}   p90 ${pct(fileCounts, 0.9)}   max ${Math.max(...fileCounts)}`);
   out.push(`lines per file        median ${median(lineCounts)}   p90 ${pct(lineCounts, 0.9)}   max ${Math.max(...lineCounts)}`);
+  // Named the same way the distribution lines are: the unit once, then the
+  // rows. An absence is stated rather than left as a missing line, because a
+  // section that vanishes when it finds nothing cannot be told from one that
+  // was never computed.
+  out.push(scattered.length
+    ? `scattered names       ${scattered.map((s, i) => `${s.token} ×${s.files} across ${s.dirs}${i ? "" : " directories"}`).join(" · ")}`
+    : `scattered names       none recur across 3 or more directories`);
 
   out.push("");
   if (hist.available) {
@@ -225,19 +232,59 @@ export function renderRelocations(hist) {
 
 // ── L2: one subtree in detail ────────────────────────────────────────────────
 
-export function renderL2({ files, conv, hist, prefix }) {
+export function renderL2({ files, conv, hist, spans = [], prefix }) {
   const inSub = files.filter((f) => f.path.startsWith(prefix + "/") || f.dir === prefix);
   if (!inSub.length) return `no source files under ${prefix}`;
   const lineCounts = inSub.map((f) => f.lines);
   const out = [];
   out.push(`${prefix}   ${inSub.length} files, ${num(lineCounts.reduce((a, b) => a + b, 0))} lines`);
   out.push(`lines per file   median ${median(lineCounts)}   p90 ${pct(lineCounts, 0.9)}   max ${Math.max(...lineCounts)}`);
+  // A subtree is read to decide whether it can come out, and that question is
+  // not answered by its own files: what holds it in place is who loads on it
+  // and what it loads on.
+  out.push("");
+  out.push(renderLoad(spans));
   out.push("");
   const sorted = [...inSub].sort((a, b) => b.lines - a.lines);
   const w = Math.max(...sorted.map((f) => String(f.lines).length));
+  // A blank cell under a date reads as an old file. A file with no commit in
+  // the window is unmeasured, and where history itself is unavailable every
+  // cell says so — the same two marks the structure table uses.
+  const stamp = (f) => (!hist.available ? "?" : hist.fileLast.has(f.path) ? day(hist.fileLast.get(f.path)) : "-");
+  const sw = Math.max(...sorted.map((f) => stamp(f).length));
+  // The gutter is measured from the row it heads, so the column name sits over
+  // its own column however wide the line counts run.
+  const gutter = " ".repeat(Math.max(1, w + 8 - "lines".length));
+  out.push(`  lines${gutter}${(hist.available ? "last-touched" : "(? = history not measured)").padEnd(sw)}  file`);
   for (const f of sorted) {
     const t = conv.isTest(f.path) ? " test" : "     ";
-    out.push(`  ${String(f.lines).padStart(w)}L${t}  ${f.path}`);
+    out.push(`  ${String(f.lines).padStart(w)}L${t}  ${stamp(f).padEnd(sw)}  ${f.path}`);
+  }
+  return out.join("\n");
+}
+
+// The load one subtree carries, per span, from the same confinement the scoped
+// span line is rendered from. Both directions always, because "nothing depends
+// on this" and "this depends on nothing" are different facts and a reader
+// planning an extraction needs both.
+function renderLoad(spans) {
+  const out = [];
+  for (const s of spans) {
+    const head = `load on this subtree${labelOf(spans, s)}`;
+    const pad = " ".repeat(head.length + 3);
+    if (!s.measured) { out.push(`${head}   not measured — ${s.why}`); continue; }
+    const c = s.load;
+    // Measured, and none of it is here. That is a different sentence from a
+    // subtree nothing crosses into, and rendering them alike would let a
+    // reader take an unanalysed subtree for a self-contained one.
+    if (!c.held) { out.push(`${head}   the ${s.eco} graph holds no ${s.unitPlural} under ${c.at}`); continue; }
+    if (!c.inbound && !c.outbound) {
+      out.push(`${head}   fan-in 0, fan-out 0 — no edge crosses into or out of ${c.at}`);
+    } else {
+      out.push(`${head}   fan-in ${c.inbound} from outside${counterparts(c.inboundTop, true)}`);
+      out.push(`${pad}fan-out ${c.outbound} to outside${counterparts(c.outboundTop, true)}`);
+    }
+    out.push(`${pad}${c.internal} ${c.internal === 1 ? "edge stays" : "edges stay"} inside ${c.at}`);
   }
   return out.join("\n");
 }
@@ -275,11 +322,21 @@ function renderSpan(d, label) {
   return out.join("\n");
 }
 
+// The counterparts a reader would follow first, and what the handful left out.
+// One renderer for both places the confinement is shown, so the truncation is
+// disclosed the same way in each: a list that simply stops is a fact the
+// reader cannot see is missing. The one-line form under a span carries names;
+// the subtree section carries the edge count with them, because that is the
+// number an extraction turns on.
+const counterparts = (t, withCount) =>
+  t.top.length
+    ? ` (top: ${t.top.map((x) => (withCount ? `${x.at} ${x.edges}` : x.at)).join(", ")}${t.more ? `, +${t.more} more` : ""})`
+    : "";
+
 function renderCrossings(c) {
-  const eg = (dirs) => (dirs.length ? ` (top: ${dirs.join(", ")})` : "");
   if (!c.inbound && !c.outbound) return `crossings   no edge crosses into or out of ${c.at}`;
-  return `crossings   ${c.inbound} inbound from outside ${c.at}${eg(c.inboundTop)} · ` +
-         `${c.outbound} outbound${eg(c.outboundTop)}`;
+  return `crossings   ${c.inbound} inbound from outside ${c.at}${counterparts(c.inboundTop)} · ` +
+         `${c.outbound} outbound${counterparts(c.outboundTop)}`;
 }
 
 // Group numbers belong to the page, not to a span: two spans each numbering
@@ -331,4 +388,115 @@ export function renderDepsDetail(spans) {
     }
   }
   return out.join("\n").trim();
+}
+
+// ── Compare: this scan against a recorded one ────────────────────────────────
+//
+// The delta and nothing else. A reader running this has already read the
+// normal view once — that is where the snapshot came from — and reprinting it
+// would bury the few lines they came back for.
+//
+// Facts, not verdicts, which here also means no exit code: a dissolved group
+// and a formed one are the same kind of fact, and the tool does not know which
+// of them the reader was aiming at.
+
+// Every list here is capped, and every cap says what it left out.
+const CAP = 5;
+const capped = (xs) => xs.slice(0, CAP).join(", ") + (xs.length > CAP ? `, +${xs.length - CAP} more` : "");
+
+// History is append-only: a directory that moved yesterday keeps the co-change
+// and the activity of the place it came from until the window fills. Printed
+// on every comparison, because the reader who needs it is the one who did not
+// think to ask.
+const LAG = [
+  `co-change and activity are history-derived and lag by design: history is`,
+  `append-only, so a move enters it only as the window fills. Compare those`,
+  `across windows, not across a refactor.`,
+];
+
+export function renderCompare(before, now) {
+  const out = [];
+  const at = (s) => (s.at ? ` at ${s.at.slice(0, 7)}` : "");
+  out.push(`snapshot    loadpath ${before.version}${at(before)}, --since ${before.since}`);
+  out.push(`now         loadpath ${now.version}${at(now)}, --since ${now.since}`);
+  out.push(`            ${num(before.files)} → ${num(now.files)} source files, ` +
+           `${num(Object.keys(before.dirs).length)} → ${num(Object.keys(now.dirs).length)} directories`);
+  const moved = [];
+
+  // ── Spans, matched by ecosystem ──
+  const ecos = [...new Set([...before.spans, ...now.spans].map((s) => s.eco))];
+  for (const eco of ecos) {
+    const b = before.spans.find((s) => s.eco === eco);
+    const n = now.spans.find((s) => s.eco === eco);
+    const head = `dependencies${ecos.length > 1 ? ` (${eco})` : ""}`;
+    const pad = " ".repeat(head.length + 2);
+    const body = [];
+    // A span measured on one side only is not a change in the repository; it
+    // is a change in what could be measured, and saying so is the difference
+    // between an installed toolchain and a restructuring.
+    if (!b) body.push(`measured now and not in the snapshot; there is nothing to compare it against`);
+    else if (!n) body.push(`in the snapshot and not measured now; there is nothing to compare it against`);
+    else {
+      if (b.edges !== n.edges || b.layers !== n.layers) {
+        body.push(`${num(b.edges)} → ${num(n.edges)} edges, ${b.layers} → ${n.layers} layers deep`);
+      }
+      // By member set, never by count: one group dissolving while another of
+      // the same size forms is the restructuring, and a count comparison calls
+      // that pair of events nothing at all.
+      const key = (g) => [...g].sort().join("\0");
+      const was = new Map(b.groups.map((g) => [key(g), g]));
+      const is = new Map(n.groups.map((g) => [key(g), g]));
+      for (const [k, g] of was) if (!is.has(k)) body.push(`group dissolved   ${capped(g)}`);
+      for (const [k, g] of is) if (!was.has(k)) body.push(`group formed      ${capped(g)}`);
+    }
+    if (!body.length) continue;
+    // A span missing from one side is a gap in the comparison, not a move, so
+    // it does not suppress the sentence below saying nothing moved. The reader
+    // gets both: what did not change, and what could not be checked.
+    if (b && n) moved.push(eco);
+    out.push("");
+    out.push(`${head}  ${body[0]}`);
+    for (const l of body.slice(1)) out.push(pad + l);
+  }
+
+  // ── Layout ──
+  const appeared = Object.keys(now.dirs).filter((d) => !(d in before.dirs)).sort();
+  const gone = Object.keys(before.dirs).filter((d) => !(d in now.dirs)).sort();
+  if (appeared.length || gone.length) {
+    moved.push("directories");
+    out.push("");
+    const rows = [];
+    if (appeared.length) rows.push(`${appeared.length} appeared   ${capped(appeared)}`);
+    if (gone.length) rows.push(`${gone.length} gone       ${capped(gone)}`);
+    out.push(`directories   ${rows[0]}`);
+    for (const r of rows.slice(1)) out.push(" ".repeat(14) + r);
+  }
+
+  // A directory that kept its name can still have had its contents moved out
+  // from under it, which is the half of a restructuring the name list misses.
+  const mass = [];
+  for (const [d, was] of Object.entries(before.dirs)) {
+    const is = now.dirs[d];
+    if (!is || !was.lines) continue;
+    const delta = (is.lines - was.lines) / was.lines;
+    if (Math.abs(delta) > 0.2) mass.push({ d, was, is, delta });
+  }
+  if (mass.length) {
+    moved.push("mass");
+    mass.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+    out.push("");
+    out.push(`mass moved by more than a fifth`);
+    for (const m of mass.slice(0, CAP)) {
+      out.push(`  ${num(m.was.lines)}L → ${num(m.is.lines)}L   ${m.delta > 0 ? "+" : ""}${Math.round(m.delta * 100)}%   ${m.d}`);
+    }
+    if (mass.length > CAP) out.push(`  +${mass.length - CAP} more beyond a fifth`);
+  }
+
+  if (!moved.length) {
+    out.push("");
+    out.push(`no structural change against the snapshot`);
+  }
+  out.push("");
+  for (const l of LAG) out.push(l);
+  return out.join("\n");
 }

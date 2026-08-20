@@ -232,6 +232,60 @@ function byDirectory(files, isTest) {
   return dirs;
 }
 
+// ── Scatter — exact, from the inventory ──────────────────────────────────────
+//
+// A name token recurring across several directories, counted over distinct
+// directories rather than over files. Twelve handlers in one directory is a
+// directory with twelve files in it; twelve handlers in nine directories is
+// one subject spread across the tree — or a layer name standing where a
+// subject name should be. Which of the two it is, the reader decides: this is
+// a lead like everything else here, and the two readings have opposite fixes.
+
+// Tokens naming a role, a language convention or a build layout rather than a
+// subject. They recur everywhere by design, so their recurrence says nothing
+// about this repository, and left in they crowd out every token that does.
+const SCATTER_STOP = new Set([
+  "test", "spec", "index", "main", "mod", "util", "utils", "helper", "helpers",
+  "internal", "pkg", "src", "lib", "common", "base", "core", "types", "type", "impl",
+]);
+
+// Separators and camelCase humps both divide words: `order_handler`,
+// `order-handler` and `orderHandler` are one name in three spellings, and a
+// split that reads only the separators leaves the third as a token that can
+// never match the other two. The second pattern ends an acronym run —
+// `HTTPServer` is `HTTP` and `Server`, not `HTTPS` and `erver`.
+function nameTokens(path) {
+  const stem = basename(path, extname(path));
+  return [...new Set(stem
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .split(/[_\-.\s]+/)
+    .map((t) => t.toLowerCase())
+    // Two letters carry no subject, a bare number is a version or a date, and
+    // a role word was refused above.
+    .filter((t) => t.length >= 3 && !/^\d+$/.test(t) && !SCATTER_STOP.has(t)))];
+}
+
+// The tokens spread widest, with both counts, so the reader can tell twelve
+// files in three directories from three files in three.
+function scatter(files, { minDirs = 3, top = 3 } = {}) {
+  const seen = new Map();
+  for (const f of files) {
+    for (const t of nameTokens(f.path)) {
+      let e = seen.get(t);
+      if (!e) seen.set(t, (e = { token: t, files: 0, dirs: new Set() }));
+      e.files++; e.dirs.add(f.dir);
+    }
+  }
+  return [...seen.values()]
+    .map((e) => ({ token: e.token, files: e.files, dirs: e.dirs.size }))
+    .filter((e) => e.dirs >= minDirs)
+    // Spread first, then weight, then the name — so the same tree prints the
+    // same three tokens in the same order however the walk happened to run.
+    .sort((a, b) => b.dirs - a.dirs || b.files - a.files || (a.token < b.token ? -1 : 1))
+    .slice(0, top);
+}
+
 // ── History — exact, from git ────────────────────────────────────────────────
 //
 // One pass with --name-status -M -z yields file lists, add/delete/rename
@@ -363,10 +417,23 @@ function history(root, { since: requested, windows, breadthCap, prefix = "", sub
   const withSource = commits.filter((c) => c.paths.length);
   if (!withSource.length) return { available: false, reason: "no commits touching source in this window" };
 
+  // When each file was last touched, over exactly the paths that voted — the
+  // same population as everything else here, so a file's date and its
+  // directory's activity can never disagree. A file this map does not hold has
+  // no commit inside the window, which is unmeasured rather than old, and the
+  // renderer says so with a mark rather than a date.
+  const fileLast = new Map();
+  for (const c of withSource) {
+    for (const p of c.paths) {
+      const prior = fileLast.get(p);
+      if (prior === undefined || c.at > prior) fileLast.set(p, c.at);
+    }
+  }
+
   return {
     available: true,
     cutoff, cutoffDay, since, rewrittenFrom: norm.rewritten || "",
-    commits: withSource,
+    commits: withSource, fileLast,
     relocations: [...relocations.values()].filter((r) => r.n >= 3).sort((a, b) => b.n - a.n),
     ...perDirectory(withSource, windows, live),
     ...coChange(withSource, windows, breadthCap, live),
@@ -564,4 +631,34 @@ function readAll(abs) {
   } finally { closeSync(fd); }
 }
 
-export { inventory, history, normalizeSince, CHARS_PER_TOKEN, CHARS_PER_TOKEN_PROSE, proseTokens, manifests, submodulePaths, byDirectory, testConvention, median, pct, day, num, tokens, git, tryGit, SOURCE_EXT, SKIP_DIR };
+// ── Snapshot — layout and spans, recorded for a later scan to read against ───
+//
+// Layout and spans, and deliberately no history. History is append-only: a
+// directory that moved yesterday carries the co-change and the activity of the
+// place it came from until the window fills, so a before/after taken across a
+// refactor would read that lag as the refactor's result. What belongs in a
+// snapshot is what a move changes the moment it lands.
+//
+// A record, not a report: this returns plain data and prints nothing, and the
+// version it carries is what lets a later reader refuse a file whose shape it
+// does not know.
+function snapshot({ version, at, since, files, dirs, spans }) {
+  return {
+    version,
+    // Omitted rather than nulled where git cannot say: a field that is present
+    // and empty reads as a repository with no commit.
+    ...(at ? { at } : {}),
+    since,
+    files: files.length,
+    dirs: Object.fromEntries([...dirs.values()].map((d) => [d.path || ".", { files: d.files, lines: d.lines }])),
+    // Only the measured ones. A span that could not be measured has no edges,
+    // no layers and no groups, and recording zeros for it would let a later
+    // comparison read an installed toolchain as a restructuring.
+    spans: spans.filter((s) => s.measured).map((s) => ({
+      eco: s.eco, unit: s.unit, edges: s.edges, nodes: s.nodes.size,
+      layers: s.depth, groups: s.tangles.map((t) => [...t]),
+    })),
+  };
+}
+
+export { inventory, history, normalizeSince, CHARS_PER_TOKEN, CHARS_PER_TOKEN_PROSE, proseTokens, manifests, submodulePaths, byDirectory, testConvention, scatter, snapshot, median, pct, day, num, tokens, git, tryGit, SOURCE_EXT, SKIP_DIR };

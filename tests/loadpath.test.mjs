@@ -1384,3 +1384,219 @@ test("the quarantine measures and does not format", () => {
     assert.ok(!deps.includes(idiom), `deps.mjs lays out output with ${idiom}; that belongs to report.mjs`);
   }
 });
+
+// ── Subtree load: what holds a subtree in place ──────────────────────────────
+//
+// A subtree is read to decide whether it can come out, and its own files do
+// not answer that. What does is the load crossing its line in each direction.
+
+test("--dir states who loads on the subtree and whom it loads on", { skip: !hasGo() }, () => {
+  const r = repo();
+  try {
+    r.file("go.mod", "module example.com/m\n\ngo 1.21\n");
+    r.file("cmd/cotx/main.go", 'package main\n\nimport _ "example.com/m/internal/world"\n\nfunc main() {}\n');
+    r.file("internal/api/a.go", 'package api\n\nimport _ "example.com/m/internal/world/store"\n');
+    r.file("internal/world/w.go", 'package world\n\nimport (\n\t_ "example.com/m/internal/ftk"\n\t_ "example.com/m/internal/world/store"\n)\n');
+    r.file("internal/world/store/s.go", "package store\n");
+    r.file("internal/ftk/f.go", "package ftk\n");
+    const out = r.run("--dir", "internal/world");
+    const inb = line(out, "fan-in"), outb = line(out, "fan-out");
+    assert.ok(inb && outb, `both directions are facts, and both are needed:\n${out}`);
+    // Two directories outside reach in, one of them through the nested
+    // package: an edge into a subtree is an edge into every parent of it.
+    assert.match(inb, /fan-in 2 from outside/, inb);
+    assert.match(inb, /cmd\/cotx 1/, inb);
+    assert.match(inb, /internal\/api 1/, inb);
+    assert.match(outb, /fan-out 1 to outside \(top: internal\/ftk 1\)/, outb);
+    // The edges that do not cross are load the subtree carries alone, and an
+    // extraction takes them with it rather than negotiating them.
+    assert.match(out, /1 edge stays inside internal\/world/, out);
+  } finally { r.clean(); }
+});
+
+test("--dir on a repository no analyzer reads says the load is not measured, never zero", () => {
+  const r = repo();
+  try {
+    r.file("a/x.rb", "require 'b'\n"); r.file("a/y.rb", "1\n"); r.file("b/z.rb", "1\n");
+    const l = line(r.run("--dir", "a"), "load on this subtree");
+    assert.match(l, /not measured/, l);
+    // A subtree nothing depends on and a subtree nobody measured are opposite
+    // conclusions, and the second one licenses the extraction the first does.
+    assert.ok(!/fan-in 0/.test(l), `an unmeasured graph must never render as a free subtree: ${l}`);
+  } finally { r.clean(); }
+});
+
+test("--dir dates each file by its last commit in the window, and marks the ones with none", () => {
+  const r = repo(); r.init();
+  try {
+    r.file("p/old.go", "x\n"); r.commit("2024-01-01T00:00:00");
+    r.file("p/new.go", "x\n"); r.commit("2024-06-01T00:00:00");
+    r.file("p/never.go", "x\n");                       // on disk, never committed
+    const out = r.run("--since", "20.years", "--dir", "p");
+    const cell = (f) => line(out, f).trim().split(/\s+/).slice(-2)[0];
+    // Asserted as an order rather than as two literal days: the renderer
+    // prints UTC and the fixture commits in whatever zone the suite runs in,
+    // and a test that pins both would pass in one hemisphere of the calendar.
+    for (const f of ["p/old.go", "p/new.go"]) assert.match(cell(f), /^\d{4}-\d{2}-\d{2}$/, out);
+    assert.ok(cell("p/new.go") > cell("p/old.go"),
+      `each file carries its own last commit, not its directory's: ${cell("p/old.go")} then ${cell("p/new.go")}`);
+    // Not old: unmeasured. A date borrowed from the directory, or a blank
+    // under a date header, would say the opposite of what is known.
+    assert.equal(cell("p/never.go"), "-", out);
+  } finally { r.clean(); }
+});
+
+// ── Scatter ─────────────────────────────────────────────────────────────────
+//
+// Counted over distinct directories, never over files: twelve handlers in one
+// directory is a directory with twelve files in it.
+
+test("a name token spread across directories is reported with both counts", () => {
+  const r = repo();
+  try {
+    for (let i = 0; i < 9; i++) r.file(`svc${i}/handler.go`, "x\n");
+    r.file("svc0/order_handler.go", "x\n");
+    r.file("svc0/payment_handler.go", "x\n");
+    const l = line(r.run(), "scattered names");
+    // Both counts, because eleven files across nine directories and eleven
+    // across three are different findings with different fixes.
+    assert.match(l, /handler ×11 across 9 directories/, l);
+  } finally { r.clean(); }
+});
+
+test("stoplisted, short and numeric tokens do not scatter", () => {
+  const r = repo();
+  try {
+    for (const d of ["alpha", "beta", "gamma", "delta"]) {
+      r.file(`${d}/index.go`, "x\n");        // a role word, everywhere by convention
+      r.file(`${d}/utils.go`, "x\n");        // the same
+      r.file(`${d}/db.go`, "x\n");           // two letters carry no subject
+      r.file(`${d}/x_2024.go`, "x\n");       // a bare number is a date or a version
+    }
+    const l = line(r.run(), "scattered names");
+    assert.match(l, /none recur across 3 or more directories/, l);
+  } finally { r.clean(); }
+});
+
+test("camelCase names split into tokens, so one subject spread thin is visible", () => {
+  const r = repo();
+  try {
+    r.file("orders/orderHandler.go", "x\n");
+    r.file("users/userHandler.go", "x\n");
+    r.file("carts/cartHandler.go", "x\n");
+    // Read whole, these are three names that recur nowhere; read as words,
+    // they are one role standing in three places.
+    const out = r.run();
+    assert.match(line(out, "scattered names"), /names\s+handler ×3 across 3 directories/, out);
+  } finally { r.clean(); }
+});
+
+test("a repository with no recurring token says so instead of dropping the line", () => {
+  const r = repo();
+  try {
+    r.file("ledger/ledger.go", "x\n");
+    r.file("ledger/posting.go", "x\n");
+    r.file("archive/ledger.go", "x\n");      // two directories: under the floor
+    const l = line(r.run(), "scattered names");
+    // A section that vanishes when it finds nothing cannot be told from one
+    // that was never computed.
+    assert.match(l, /none recur across 3 or more directories/, l);
+  } finally { r.clean(); }
+});
+
+// ── Move closure: snapshot and compare ──────────────────────────────────────
+
+const scratch = (tag) => join(tmpdir(), `lp-${tag}-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+const csproj = (r, n, dep) => r.file(`${n}/${n}.csproj`,
+  `<Project>${dep ? `<ItemGroup><ProjectReference Include="../${dep}/${dep}.csproj" /></ItemGroup>` : ""}</Project>`);
+// Whatever the command wrote to stderr before refusing, or null if it did not.
+const refused = (fn) => { try { fn(); return null; } catch (e) { return String(e.stderr ?? ""); } };
+
+test("a snapshot taken and compared against an unchanged tree reports no structural change", () => {
+  const r = repo();
+  const f = scratch("snap");
+  try {
+    for (const n of ["A", "B"]) r.file(`${n}/${n.toLowerCase()}.cs`, `class ${n} {}`);
+    csproj(r, "A", "B"); csproj(r, "B", null);
+    r.run("--snapshot", f);
+    const snap = JSON.parse(readFileSync(f, "utf8"));
+    assert.equal(snap.version, JSON.parse(readFileSync(join(HERE, "..", "package.json"), "utf8")).version);
+    assert.equal(snap.spans.length, 1, `the measured span must be recorded: ${JSON.stringify(snap.spans)}`);
+    assert.equal(snap.spans[0].eco, "C#");
+    const out = r.run("--compare", f);
+    assert.match(out, /no structural change against the snapshot/, out);
+    // The delta and nothing else: the reader has already seen the view the
+    // snapshot came from.
+    assert.ok(!/files per directory/.test(out), `the normal view must not be reprinted:\n${out}`);
+    assert.ok(!/dependencies {2}\d/.test(out), `nor the span line it opens with:\n${out}`);
+    assert.match(out, /lag by design/, `and what history cannot answer is said every time:\n${out}`);
+  } finally { rmSync(f, { force: true }); r.clean(); }
+});
+
+test("compare names the group that dissolved and the one that formed, by their members", () => {
+  const r = repo();
+  const f = scratch("groups");
+  try {
+    for (const n of ["A", "B", "C", "D"]) r.file(`${n}/${n.toLowerCase()}.cs`, `class ${n} {}`);
+    csproj(r, "A", "B"); csproj(r, "B", "A"); csproj(r, "C", null); csproj(r, "D", null);
+    r.run("--snapshot", f);
+    // The cycle moves: one group before and one after, two edges before and
+    // two after, one layer before and one after. Only the members change, and
+    // a comparison of counts cannot see it at all.
+    csproj(r, "A", null); csproj(r, "B", null); csproj(r, "C", "D"); csproj(r, "D", "C");
+    const out = r.run("--compare", f);
+    assert.match(line(out, "group dissolved") ?? "", /A, B/, out);
+    assert.match(line(out, "group formed") ?? "", /C, D/, out);
+  } finally { rmSync(f, { force: true }); r.clean(); }
+});
+
+test("compare names the directories that appeared and went, and says how many it did not name", () => {
+  const r = repo();
+  const f = scratch("dirs");
+  try {
+    for (let i = 0; i < 8; i++) r.file(`was${i}/f.go`, "x\n");
+    r.file("stays/f.go", "x\n");
+    r.run("--snapshot", f);
+    for (let i = 0; i < 8; i++) rmSync(join(r.dir, `was${i}`), { recursive: true });
+    for (let i = 0; i < 8; i++) r.file(`now${i}/f.go`, "x\n");
+    const out = r.run("--compare", f);
+    const app = line(out, "appeared"), gone = line(out, "gone");
+    assert.match(app ?? "", /8 appeared/, out);
+    assert.match(gone ?? "", /8 gone/, out);
+    // A capped list that stops without saying so is a truncation the reader
+    // cannot see.
+    assert.match(app, /\+3 more/, app);
+    assert.match(gone, /\+3 more/, gone);
+  } finally { rmSync(f, { force: true }); r.clean(); }
+});
+
+test("--snapshot without a file is refused, and says why there is no default", () => {
+  const r = repo();
+  try {
+    r.file("p/a.go", "x\n");
+    const err = refused(() => r.run("--snapshot"));
+    assert.ok(err !== null, "a missing path must be refused, not guessed at");
+    assert.match(err, /--snapshot needs the file to write/, err);
+    // The reason is the point: the only default worth having sits inside the
+    // repository being read.
+    assert.match(err, /read does not write/, err);
+  } finally { r.clean(); }
+});
+
+test("compare on a file that is not a snapshot is refused, naming what it expected", () => {
+  const r = repo();
+  const bad = scratch("bad"), old = scratch("old");
+  try {
+    r.file("p/a.go", "x\n");
+    writeFileSync(bad, "this file is not JSON\n");
+    writeFileSync(old, '{"dirs":{},"spans":[]}\n');
+    const e1 = refused(() => r.run("--compare", bad));
+    assert.ok(e1 !== null, "a file that does not parse must be refused");
+    assert.match(e1, /written by --snapshot/, e1);
+    // A record with no version is not one this tool wrote, and reading its
+    // fields anyway would compare against zeros.
+    const e2 = refused(() => r.run("--compare", old));
+    assert.ok(e2 !== null, "a record with no version is not a snapshot");
+    assert.match(e2, /no version field/, e2);
+  } finally { rmSync(bad, { force: true }); rmSync(old, { force: true }); r.clean(); }
+});

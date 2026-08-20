@@ -91,9 +91,9 @@ Disclosure is an algorithm, not a flag. Each module discloses in three layers, a
 
 | | L0 — orient | L1 — structure | L2 — detail |
 |---|---|---|---|
-| **Inventory** | robust distribution summary plus a size ranking read against it, O(F log F) | flat table ordered by mass, binary-searched to a token budget, O(V log V) | file level for one named subtree, O(F_subtree) |
-| **History** | age, commit count, active/dormant split, O(C) | weighted co-change with breadth cap and time windows, O(Σ min(k,cap)²) | not built |
-| **Dependency** | per declared ecosystem: which analyzer ran, layers deep, entangled group count — or a named absence, O(V+E) | entangled groups with their anchors, and each directory's layer and group carried on its own row, O(V+E) | not built; an edge list would contradict the rule above it |
+| **Inventory** | robust distribution summary plus a size ranking read against it, and the name tokens spread across the most directories, O(F log F) | flat table ordered by mass, binary-searched to a token budget, O(V log V) | file level for one named subtree, O(F_subtree) |
+| **History** | age, commit count, active/dormant split, O(C) | weighted co-change with breadth cap and time windows, O(Σ min(k,cap)²) | each file's last commit inside the window, for one named subtree, O(Σ paths) |
+| **Dependency** | per declared ecosystem: which analyzer ran, layers deep, entangled group count — or a named absence, O(V+E) | entangled groups with their anchors, and each directory's layer and group carried on its own row, O(V+E) | the load crossing one named subtree's line, counted per counterpart directory, O(V+E); still no edge list, which would contradict the rule above it |
 
 **L0 is the norms and the largest. L1 is the structure. L2 is the detail.** Inventory's L0 summarises a distribution and then ranks by size, each row printed as a ratio against that distribution. It does not rank by deviation and must not claim to: `files / median` is monotone in `files`, so dividing every row by one constant cannot reorder them, and a heading promising the directories furthest from this repository's norms promised an arithmetic nothing performed. A real deviation ranking — over a distribution the ratio does not already carry — is the clearest unclaimed improvement in the tool, together with the same treatment for History's and Dependency's L0, which report totals.
 
@@ -101,7 +101,7 @@ Disclosure is an algorithm, not a flag. Each module discloses in three layers, a
 
 `cmd/cotx 56f` is uninterpretable alone. `files per directory: median 7, p90 32, max 136` makes every later row readable, and turns `136f` into *19× the median* — which is a fact about the distribution, checkable and exact, not a verdict. One line buys the meaning of every line after it.
 
-L0 is around twenty lines and carries the file and line totals, tree depth, language mix, test ratio, both distributions, repository age, the active-versus-dormant split, the modules declared by manifests, and the five largest directories, each against that median. It also answers which analyzer to run, because the manifest names the ecosystem.
+L0 is around twenty lines and carries the file and line totals, tree depth, language mix, test ratio, both distributions, the name tokens recurring across the most directories, repository age, the active-versus-dormant split, the modules declared by manifests, and the five largest directories, each against that median. It also answers which analyzer to run, because the manifest names the ecosystem.
 
 ### Why the structure table must meet a budget
 

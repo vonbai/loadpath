@@ -24,9 +24,12 @@ Three consequences hold in every use:
 ## Run it
 
 ```
-node scripts/loadpath.mjs [REPO]              orient — 729–1,517 tokens measured
-node scripts/loadpath.mjs [REPO] --structure  every directory, plus entangled groups
-node scripts/loadpath.mjs [REPO] --dir PATH   one subtree, file by file
+node scripts/loadpath.mjs [REPO]                orient — 729–1,517 tokens measured
+node scripts/loadpath.mjs [REPO] --structure    every directory, plus entangled groups
+node scripts/loadpath.mjs [REPO] --dir PATH     one subtree, file by file, with the load
+                                                crossing its line and each file's last touch
+node scripts/loadpath.mjs [REPO] --snapshot F   also record this scan's layout and spans
+node scripts/loadpath.mjs [REPO] --compare F    only what moved since that snapshot
 ```
 
 `--since 12.months` sets the history window, `--budget 1600` the structure table's token allowance. Requires Node 18+ and nothing else.
@@ -36,6 +39,7 @@ node scripts/loadpath.mjs [REPO] --dir PATH   one subtree, file by file
 **The distribution comes before every row that uses it.** `136f` is meaningless until `median 7` is on the page; then it is 19× the median, which is a fact you can check.
 
 - **files and lines per directory** — median, p90, max. Everything below is read against these.
+- **scattered names** — name tokens recurring across directories, counted over distinct directories rather than files, with role words such as `util` and `index` refused. A token in nine directories is one subject spread across the tree, or a layer name standing where a subject name should be; which of the two it is, you learn by opening them.
 - **activity** — directories touched recently, and how many were not. A directory with no recent commits is *unmeasured*, not known to be safe: on real repositories a fifth to two thirds of files go untouched in a window while some of them still carry later defects.
 - **top author N% of Mc** — the share of commits by the largest contributor, beside the raw count. Concentration ranked first among 65 metrics in a defect study where the raw count did not; it is undefined where nothing was committed, which is why both are printed.
 - **relocations** — what this repository has already moved, from git's rename records. The migration it has already done is usually the best evidence of the one it is mid-way through. Alone on the page this is a record rather than a lead, so it counts every file a rename touched and not only source, and its header says so; the side a move came from is expected to be gone.
@@ -68,6 +72,7 @@ Frozen, vendored, generated and archived paths are load-bearing: **the member do
 
 Restructuring transfers load while the building stands.
 
+- Take a snapshot before you move anything and compare after: layout and spans answer at once, so the comparison tells you whether the signal you moved on has actually cleared — while co-change and activity still describe the tree you left, and will until the window fills.
 - Keep structural and behavioural change in separate commits. A move mixed with an edit is unreviewable and hides both.
 - Move on a measured signal toward a named subject, one subject at a time, stopping when the signal clears.
 - Beyond one move, name the phase you are in: **prepare** (target exists, no callers) → **coexist** (both live, one declared the source of truth) → **migrate** (move callers) → **cut over** → **stabilize** → **remove**. Skipping coexistence turns a migration into an outage.

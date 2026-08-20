@@ -372,10 +372,10 @@ export function layers(comps, out) {
 // One span per ecosystem the manifests declare, in a fixed order, each one
 // either a measured graph or a named absence. Never a merged graph, never a
 // winner, never silence about an ecosystem this page has already named.
-export function dependencies(root, { files, mans = [], prefix = "" }) {
+export function dependencies(root, { files, mans = [], prefix = "", subtree = "" }) {
   const spans = [];
   for (const fam of families(mans)) {
-    const one = span(root, fam, { files, prefix });
+    const one = span(root, fam, { files, prefix, subtree });
     if (!one) continue;
     spans.push(one);
   }
@@ -388,10 +388,43 @@ export function dependencies(root, { files, mans = [], prefix = "" }) {
 const rebase = (n, at) => (!at ? n : n === "." ? at : `${at}/${n}`);
 const sum = (m) => [...m.values()].reduce((a, b) => a + b, 0);
 // Most-loaded first, and a handful: these are examples a reader follows, not
-// an edge list. Which ones are worth printing is Report's decision.
-const busiest = (m) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([n]) => n);
+// an edge list. What the handful left out travels beside it, because a list
+// that simply stops is a truncation the reader cannot see. Which ones are
+// worth printing, and how, is Report's decision.
+const TOP = 5;
+const busiest = (m) => {
+  const all = [...m.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
+  return { top: all.slice(0, TOP).map(([at, edges]) => ({ at, edges })), more: Math.max(all.length - TOP, 0) };
+};
 
-function span(root, fam, { files, prefix }) {
+// One predicate decides what "inside" means — for the scope a reader scanned,
+// and for the subtree they asked about by name. The two questions are the same
+// question at different paths, and a second copy of this arithmetic would
+// eventually disagree with the first in a way that reads as a fact about the
+// repository rather than as the defect it is.
+//
+// `within` is the load the subtree carries alone; `inbound` and `outbound` are
+// what crosses its line, counted per counterpart directory so the reader can
+// follow the busiest one rather than an edge list.
+export function confine(nodes, edges, at) {
+  const inside = (n) => !at || n === at || n.startsWith(at + "/");
+  const kept = new Set([...nodes].filter(inside));
+  const within = new Set(); const inbound = new Map(); const outbound = new Map();
+  for (const e of edges) {
+    const [a, b] = e.split("\0");
+    if (inside(a) && inside(b)) within.add(e);
+    else if (inside(b)) inbound.set(a, (inbound.get(a) || 0) + 1);
+    else if (inside(a)) outbound.set(b, (outbound.get(b) || 0) + 1);
+  }
+  return {
+    kept, within,
+    crossings: { at, held: kept.size, internal: within.size,
+                 inbound: sum(inbound), outbound: sum(outbound),
+                 inboundTop: busiest(inbound), outboundTop: busiest(outbound) },
+  };
+}
+
+function span(root, fam, { files, prefix, subtree }) {
   if (!fam.run) return notMeasured(fam.eco, `no analyzer shipped for ${fam.eco}; edges are not guessed here`);
   const at = commonAncestor(fam.paths);
   let r;
@@ -437,24 +470,19 @@ function span(root, fam, { files, prefix }) {
   // subdirectory loses exactly the edges the reader is asking about — every
   // import that crosses into it — and on a Go repository finds no go.mod at
   // all. What crosses the line is reported as load, not dropped in silence.
-  const inside = (n) => !prefix || n === prefix || n.startsWith(prefix + "/");
-  const kept = new Set([...nodes].filter(inside));
-  const within = new Set(); const inbound = new Map(); const outbound = new Map();
-  for (const e of edges) {
-    const [a, b] = e.split("\0");
-    if (inside(a) && inside(b)) within.add(e);
-    else if (inside(b)) inbound.set(a, (inbound.get(a) || 0) + 1);
-    else if (inside(a)) outbound.set(b, (outbound.get(b) || 0) + 1);
-  }
+  const { kept, within, crossings } = confine(nodes, edges, prefix);
   // A scope that holds none of this ecosystem is an absence only where the
   // manifests in scope named it. Where they did not, the reader scoped away
   // from an ecosystem rather than failing to measure one, and a line saying so
   // is noise on every subdirectory of a polyglot repository.
   const unitPlural = r.unitPlural || r.unit + "s";
   if (!kept.size) return fam.paths.length ? notMeasured(fam.eco, `the ${fam.eco} graph holds no ${unitPlural} under ${prefix}`) : null;
-  const crossings = prefix
-    ? { at: prefix, inbound: sum(inbound), outbound: sum(outbound), inboundTop: busiest(inbound), outboundTop: busiest(outbound) }
-    : null;
+
+  // The subtree a reader named with --dir is a second question about the same
+  // graph, and it is asked of the whole module rather than of the scope: an
+  // edge reaching into that subtree from outside the scanned scope is still
+  // load the subtree carries, and confining twice would hide exactly it.
+  const load = subtree ? confine(nodes, edges, subtree).crossings : null;
 
   const out = new Map();
   for (const e of within) { const [a2, b] = e.split("\0"); if (!out.has(a2)) out.set(a2, new Set()); out.get(a2).add(b); }
@@ -475,7 +503,8 @@ function span(root, fam, { files, prefix }) {
   }));
 
   return { eco: fam.eco, measured: true, provenance: r.provenance, unit: r.unit, unitPlural,
-           note: r.note || "", scope, out, nodes: kept, edges: within.size, comps, tangles, level, depth, fanIn, fanOut, layerOf, groupOf, crossings };
+           note: r.note || "", scope, out, nodes: kept, edges: within.size, comps, tangles, level, depth, fanIn, fanOut, layerOf, groupOf,
+           crossings: prefix ? crossings : null, load };
 }
 
 // A reason is data, exactly as History's `unavailable` is. Composing the

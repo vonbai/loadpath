@@ -194,7 +194,7 @@ const MUTANTS = [
   ["analyzer node names are left in the analyzer's own coordinates", `${S}/deps.mjs`,
     "const nodes = new Set([...r.nodes].map((n) => rebase(n, at)));", "const nodes = new Set(r.nodes);"],
   ["a subdirectory scan presents the whole module again", `${S}/deps.mjs`,
-    'const inside = (n) => !prefix || n === prefix || n.startsWith(prefix + "/");', "const inside = () => true;"],
+    'const inside = (n) => !at || n === at || n.startsWith(at + "/");', "const inside = () => true;"],
   ["a scope with none of the ecosystem in it is presented as a graph of nothing", `${S}/deps.mjs`,
     "if (!kept.size) return fam.paths.length", "if (false) return fam.paths.length"],
   ["several spans print without their labels", `${S}/report.mjs`,
@@ -207,6 +207,27 @@ const MUTANTS = [
     "|template[-_.][^/]*", ""],
   ["a wide ecosystem name runs into the path beside it", `${S}/report.mjs`,
     '`  ${(m.eco + " ").padEnd(11)}${m.path || "."}`', '`  ${m.eco.padEnd(11)}${m.path || "."}`'],
+
+  // Read, place, move. Each of these deletes something a reader would act on
+  // while leaving a page that still looks complete.
+  ["the subtree load filter counts internal edges as crossings", `${S}/deps.mjs`,
+    "if (inside(a) && inside(b)) within.add(e);", "if (false) within.add(e);"],
+  ["the fan-in line is dropped from the subtree load", `${S}/report.mjs`,
+    "out.push(`${head}   fan-in ${c.inbound} from outside${counterparts(c.inboundTop, true)}`);", ""],
+  ["every file reads as never touched", `${S}/scan.mjs`,
+    "if (prior === undefined || c.at > prior) fileLast.set(p, c.at);", "void 0;"],
+  ["role words scatter alongside subjects", `${S}/scan.mjs`,
+    " && !SCATTER_STOP.has(t)", ""],
+  ["a token in one directory is called scattered", `${S}/scan.mjs`,
+    ".filter((e) => e.dirs >= minDirs)", ".filter((e) => e.dirs >= 1)"],
+  ["a camelCase name is one token again", `${S}/scan.mjs`,
+    '.replace(/([a-z0-9])([A-Z])/g, "$1 $2")', ""],
+  ["entangled groups are compared by count instead of by membership", `${S}/report.mjs`,
+    'const key = (g) => [...g].sort().join("\\0");', "const key = (g) => String(g.length);"],
+  ["compare stops saying that history lags a move", `${S}/report.mjs`,
+    "for (const l of LAG) out.push(l);", ""],
+  ["the snapshot loses the field that identifies it", `${S}/scan.mjs`,
+    "    version,", ""],
 ];
 
 const list = process.argv.includes("--list");

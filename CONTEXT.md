@@ -26,11 +26,19 @@ _Avoid_: estimated, approximate, heuristic
 A first-class result meaning no method applied here. Distinct from a measurement of zero, and never rendered as one.
 _Avoid_: none, empty, clean, no results
 
+**Snapshot**:
+The immediate signals of one scan (layout and spans), recorded to compare a restructuring's before and after. History is not in it: history is append-only and lags a move by design.
+_Avoid_: baseline, checkpoint, dump
+
 ### What the tool measures
 
 **Affinity**:
 Directories that change in the same commits. Measured from history, exact.
 _Avoid_: coupling, temporal coupling, change coupling
+
+**Scatter**:
+A name token recurring across several directories. A lead that one subject is spread across the tree — or that a layer name is standing where a subject name should be. Counted over distinct directories, not files.
+_Avoid_: duplication, naming smell, convention
 
 **Dependency**:
 One directory needing another to compile or run. Measured by a native analyzer, or Not measured.

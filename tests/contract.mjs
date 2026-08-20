@@ -112,6 +112,11 @@ const ADR_EVIDENCE = {
   "0011": /e\.topShare = shares\[0\]/,
   "0012": /of \$\{p\.base\}c/,
   "0013": /const FAMILIES = \[/,      // one span per ecosystem, rooted at its own manifests
+  // The field list is the decision: layout and spans, and nothing from git.
+  // Nothing else holds history out of the record — a suite can assert what a
+  // snapshot contains, not what it must never contain — so this is where a
+  // `hist` added to that signature would be caught.
+  "0014": /function snapshot\(\{ version, at, since, files, dirs, spans \}\)/,
 };
 for (const f of readdirSync(join(ROOT, "docs", "adr"))) {
   const n = f.slice(0, 4);
@@ -142,6 +147,15 @@ for (const f of readdirSync(join(ROOT, "docs", "adr"))) {
     if (n(m[1]) !== Math.min(...got) || n(m[2]) !== Math.max(...got)) {
       errors.push(`README's ${name} range ${m[1]}–${m[2]} is not the measured ${Math.min(...got)}–${Math.max(...got)}`);
     }
+  }
+  // SKILL.md publishes the same orient range in its own words, and it was the
+  // copy nothing checked — one file's worth of drift away from the failure
+  // this whole block exists to catch.
+  const orient = vals.map((v) => v.orientTokens);
+  const sm = /orient — ([\d,]+)–([\d,]+) tokens measured/.exec(text);
+  if (!sm) errors.push("SKILL.md states no orient token range");
+  else if (orient.every((x) => x != null) && (n(sm[1]) !== Math.min(...orient) || n(sm[2]) !== Math.max(...orient))) {
+    errors.push(`SKILL.md's orient range ${sm[1]}–${sm[2]} is not the measured ${Math.min(...orient)}–${Math.max(...orient)}`);
   }
 }
 

@@ -10,14 +10,16 @@
 //   --top 12              co-change pairs to print
 //   --dir PATH            file-level detail for one subtree, then stop
 //   --structure           add the structure table and the entangled groups
+//   --snapshot FILE       also record this scan's layout and spans to FILE
+//   --compare FILE        print only what moved since FILE, then stop
 //
 // The default output orients. Ask for more by name.
 
-import { existsSync, statSync, realpathSync } from "node:fs";
+import { existsSync, statSync, realpathSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { inventory, history, manifests, submodulePaths, byDirectory, testConvention, tryGit, tokens, CHARS_PER_TOKEN } from "./scan.mjs";
-import { renderL0, renderL1, renderL2, renderCoChange, renderRelocations, renderDepsDetail } from "./report.mjs";
+import { inventory, history, manifests, submodulePaths, byDirectory, testConvention, scatter, snapshot, tryGit, tokens, CHARS_PER_TOKEN } from "./scan.mjs";
+import { renderL0, renderL1, renderL2, renderCoChange, renderRelocations, renderDepsDetail, renderCompare } from "./report.mjs";
 import { dependencies } from "./deps.mjs";
 
 // `npx skills add` copies skills/loadpath/ and nothing else, so package.json
@@ -27,7 +29,7 @@ import { dependencies } from "./deps.mjs";
 const VERSION = "0.2.2";
 
 function parse(argv) {
-  const o = { repo: ".", since: "12.months", budget: 1600, windows: 4, cap: 30, top: 12, dir: null, structure: false };
+  const o = { repo: ".", since: "12.months", budget: 1600, windows: 4, cap: 30, top: 12, dir: null, structure: false, snapshot: null, compare: null };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -38,6 +40,16 @@ function parse(argv) {
     else if (a === "--top") o.top = Math.max(1, Number(argv[++i]) || 12);
     else if (a === "--dir") o.dir = argv[++i];
     else if (a === "--structure") o.structure = true;
+    // A file the user named, and only that: there is no default path here,
+    // because the only default worth having would be inside the repository
+    // being read, and a read does not write there. An empty string is the
+    // flag arriving without its file, which main() refuses by name.
+    else if (a === "--snapshot" || a === "--compare") {
+      const v = argv[i + 1];
+      const given = v !== undefined && !v.startsWith("-");
+      if (given) i++;
+      o[a.slice(2)] = given ? v : "";
+    }
     else if (a === "--version" || a === "-V") { o.version = true; }
     else if (a === "-h" || a === "--help") { o.help = true; }
     else if (!a.startsWith("-")) rest.push(a);
@@ -58,15 +70,53 @@ const HELP = `loadpath — exact facts about how a codebase carries its weight
   --top 12            co-change pairs to print
   --dir PATH          file-level detail for one subtree
   --structure         add the structure table and entangled groups
+  --snapshot FILE     also write this scan's layout and spans to FILE
+  --compare FILE      print only what moved since FILE, and nothing else
+
+Take a snapshot before moving code and compare after: the layout and the spans
+answer immediately, while co-change and activity lag a move by design.
+Neither flag has a default path — the file is yours to name, so that nothing
+is ever written into the repository being read.
 
 Every number is measured from the filesystem or from git. Where a thing cannot
 be measured the output says "not measured", which is not the same as zero.
 The tool emits leads; a finding exists after someone reads the code.`;
 
+// A usage error the reader can act on, and nothing printed on stdout: what
+// this tool writes there is measurements, and a message in that stream would
+// be read as one.
+function refuse(why) {
+  console.error(`loadpath: ${why}`);
+  process.exit(1);
+}
+
+// What --compare expects, checked before anything is compared against it. A
+// file whose version is missing is not a snapshot this tool wrote, and reading
+// its fields anyway would silently compare against zeros.
+function readSnapshot(file) {
+  let raw;
+  try { raw = readFileSync(file, "utf8"); }
+  catch (e) { refuse(`cannot read ${file} — ${String(e.message).split("\n")[0]}`); }
+  let j;
+  try { j = JSON.parse(raw); }
+  catch { refuse(`${file} is not JSON; --compare expects a file written by --snapshot`); }
+  if (!j || typeof j !== "object" || typeof j.version !== "string") {
+    refuse(`${file} carries no version field, so it is not a loadpath snapshot; --compare expects a file written by --snapshot`);
+  }
+  // Shape, not just presence: a field of the wrong type would raise inside the
+  // comparison, and a stack trace is a worse answer than a sentence.
+  if (!j.dirs || typeof j.dirs !== "object" || !Array.isArray(j.spans)) {
+    refuse(`${file} carries no layout or no spans; --compare expects a file written by --snapshot`);
+  }
+  return j;
+}
+
 function main() {
   const o = parse(process.argv.slice(2));
   if (o.version) { console.log(`loadpath ${VERSION}`); return; }
   if (o.help) { console.log(HELP); return; }
+  if (o.snapshot === "") refuse("--snapshot needs the file to write, and has no default: the only default worth having would sit inside the repository being read, and a read does not write there");
+  if (o.compare === "") refuse("--compare needs the snapshot file to read, and has no default");
 
   let root = resolve(o.repo);
   if (!existsSync(root) || !statSync(root).isDirectory()) {
@@ -119,45 +169,63 @@ function main() {
   // scope is not this reader's news.
   const filtered = declared.filtered.filter(inScope);
 
-  if (o.dir) {
-    console.log(renderL2({ files, conv, hist, prefix: o.dir.replace(/\/$/, "") }));
-    return;
-  }
-
   // Where each analyzer is rooted is the quarantine's decision, not this
   // file's: one root for the whole repository is what made a Go backend beside
-  // a Node frontend report that no analyzer applied to either.
-  const spans = dependencies(root, { files, mans, prefix });
+  // a Node frontend report that no analyzer applied to either. The subtree is
+  // a second question asked of the same graph, so naming one does not change
+  // what is measured — only what is also reported.
+  const subtree = o.dir ? o.dir.replace(/\/$/, "") : "";
+  const spans = dependencies(root, { files, mans, prefix, subtree });
+  const head = tryGit(root, ["rev-parse", "HEAD"]);
+  const record = () => snapshot({
+    version: VERSION, at: head.ok ? head.out.trim() : "", since: o.since, files, dirs, spans,
+  });
 
-  const parts = [];
-  parts.push(root + (prefix ? "/" + prefix : ""));
-  if (scopeNote) parts.push(scopeNote);
-  parts.push("");
-  // The whole result, not a pre-rendered line: the entry point does not format.
-  parts.push(renderL0({ files, dirs, conv, hist, mans, filtered, spans, root, since: o.since, windows: o.windows }));
-
-  const reloc = renderRelocations(hist);
-  if (reloc) { parts.push(""); parts.push(reloc); }
-
-  parts.push("");
-  parts.push(renderCoChange(hist, o.top));
-
-  if (o.structure) {
+  let text;
+  if (o.compare) {
+    // Only the delta. The reader has seen the normal view already — it is
+    // where the snapshot came from — and reprinting it would bury the lines
+    // they came back for.
+    text = renderCompare(readSnapshot(o.compare), record());
+  } else if (o.dir) {
+    text = renderL2({ files, conv, hist, spans, prefix: subtree });
+  } else {
+    const parts = [];
+    parts.push(root + (prefix ? "/" + prefix : ""));
+    if (scopeNote) parts.push(scopeNote);
     parts.push("");
-    parts.push("structure   every directory, largest first");
-    parts.push(renderL1({ dirs, hist, spans, budget: o.budget }));
-    // Each span's header line already appeared in L0; only the detail is new.
-    const detail = renderDepsDetail(spans);
-    if (detail) { parts.push(""); parts.push(detail); }
+    // The whole result, not a pre-rendered line: the entry point does not format.
+    parts.push(renderL0({ files, dirs, conv, hist, mans, filtered, spans, scattered: scatter(files), root, since: o.since, windows: o.windows }));
+
+    const reloc = renderRelocations(hist);
+    if (reloc) { parts.push(""); parts.push(reloc); }
+
+    parts.push("");
+    parts.push(renderCoChange(hist, o.top));
+
+    if (o.structure) {
+      parts.push("");
+      parts.push("structure   every directory, largest first");
+      parts.push(renderL1({ dirs, hist, spans, budget: o.budget }));
+      // Each span's header line already appeared in L0; only the detail is new.
+      const detail = renderDepsDetail(spans);
+      if (detail) { parts.push(""); parts.push(detail); }
+    }
+
+    parts.push("");
+    parts.push("next        --structure for every directory and the entangled groups");
+    parts.push("            --dir PATH for one subtree, file by file");
+    parts.push("            then read the code. These are leads, not findings.");
+    text = parts.join("\n");
   }
-
-  parts.push("");
-  parts.push("next        --structure for every directory and the entangled groups");
-  parts.push("            --dir PATH for one subtree, file by file");
-  parts.push("            then read the code. These are leads, not findings.");
-
-  const text = parts.join("\n");
   console.log(text);
+  // Written after the view, and to the path the reader named. Where it lands
+  // is their choice; this tool has no opinion about it beyond never picking
+  // one itself.
+  if (o.snapshot) {
+    writeFileSync(o.snapshot, JSON.stringify(record(), null, 2) + "\n");
+    console.error(`[loadpath] snapshot written to ${resolve(o.snapshot)}`);
+  }
   console.error(`[loadpath] v${VERSION}  \u2264${tokens(text)} tokens (upper bound: characters / ${CHARS_PER_TOKEN}, calibrated against tiktoken on this tool's densest output)`);
 }
 
