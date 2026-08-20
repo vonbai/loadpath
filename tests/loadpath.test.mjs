@@ -8,14 +8,16 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // Everything below goes through the command, because that is what a reader
-// runs. These two imports are for the one case the command's own clamps put
-// out of reach — see "no width of table fits the budget".
+// runs. These imports are for the cases the command cannot reach: the clamps
+// put one out of range (see "no width of table fits the budget"), and one needs
+// an array wider than any repository this suite is willing to build.
 import { renderL1 } from "../skills/loadpath/scripts/report.mjs";
-import { inventory, byDirectory, testConvention } from "../skills/loadpath/scripts/scan.mjs";
+import { inventory, byDirectory, testConvention, maxOf } from "../skills/loadpath/scripts/scan.mjs";
+import { MADGE } from "../skills/loadpath/scripts/deps.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(HERE, "..", "skills", "loadpath", "scripts", "loadpath.mjs");
@@ -57,7 +59,7 @@ const hasGo = () => {
 let madgeSeen = null;
 const hasMadge = () => {
   if (madgeSeen === null) {
-    try { execFileSync("npx", ["--yes", "--offline", "madge", "--version"], { stdio: "ignore", timeout: 120000 }); madgeSeen = true; }
+    try { execFileSync("npx", ["--yes", "--offline", MADGE, "--version"], { stdio: "ignore", timeout: 120000 }); madgeSeen = true; }
     catch { madgeSeen = false; }
   }
   return madgeSeen;
@@ -78,7 +80,7 @@ test("counts files and lines, and states the distribution", () => {
     for (let i = 0; i < 5; i++) r.file(`pkg/f${i}.go`, "x\n".repeat(10));
     r.file("pkg/big.go", "x\n".repeat(100));
     const out = r.run();
-    assert.match(out, /^6 source files, 150 lines, 1 directories/m);
+    assert.match(out, /^6 source files, 150 lines, 1 directory/m);
     assert.equal(field(line(out, "lines per file"), "median"), 10, "median must be the median, not the mean");
   } finally { r.clean(); }
 });
@@ -92,7 +94,7 @@ test("generated and vendored files are excluded before anything else", () => {
     r.file("node_modules/dep/index.js", "x\n".repeat(999));
     r.file("vendor/lib/v.go", "x\n".repeat(999));
     const out = r.run();
-    assert.match(out, /^1 source files/m);
+    assert.match(out, /^1 source file,/m);
   } finally { r.clean(); }
 });
 
@@ -103,7 +105,7 @@ test("a symlink is not counted as a second file", () => {
     execFileSync("ln", ["-s", join(r.dir, "a", "one.go"), join(r.dir, "a", "alias.go")]);
     execFileSync("ln", ["-s", join(r.dir, "a"), join(r.dir, "b")]);
     const out = r.run();
-    assert.match(out, /^1 source files, 7 lines/m, "neither the aliased file nor the aliased directory is a second file");
+    assert.match(out, /^1 source file, 7 lines/m, "neither the aliased file nor the aliased directory is a second file");
   } finally { r.clean(); }
 });
 
@@ -207,7 +209,7 @@ test("history counts directories that still exist, never more", () => {
     rmSync(join(r.dir, "gone"), { recursive: true });
     r.file("stays/y.go", "2\n"); r.commit("2024-02-01T00:00:00");
     const l = line(r.run("--since", "20.years"), "activity");
-    const total = Number(l.match(/of (\d+) directories/)[1]);
+    const total = Number(l.match(/of (\d+) director/)[1]);
     assert.equal(total, 1, "a deleted directory must not inflate the count");
   } finally { r.clean(); }
 });
@@ -306,7 +308,7 @@ test("a co-change pair naming a directory that is gone is dropped, and the drop 
     assert.ok(!/a \+ b/.test(out), `a lead must name a directory the reader can open:\n${out}`);
     // A shorter list with no reason for being shorter is the same failure one
     // step quieter, so the count and the reason are printed.
-    assert.match(out, /1 pairs named a directory the tree no longer has/, out);
+    assert.match(out, /1 pair named a directory the tree no longer has/, out);
   } finally { r.clean(); }
 });
 
@@ -494,7 +496,7 @@ test("Go edges come from go list and the component count matches", () => {
     const l = line(r.run(), "dependencies");
     assert.match(l, /go list/);
     assert.ok(/\b1 edges?\b/.test(l), `expected one edge, got: ${l}`);
-    assert.match(r.run(), /0 mutually entangled group/);
+    assert.match(r.run(), /no mutually entangled group/);
   } finally { r.clean(); }
 });
 
@@ -525,9 +527,9 @@ test("scanning a subdirectory keeps every path repository-relative", () => {
     // must be scoped too, or the reader is shown directories the tool said it
     // was not scanning.
     assert.ok(!/other\/b/.test(out), `a directory outside the scope leaked in:\n${out}`);
-    assert.match(out, /^1 source files/m, "only the scoped subtree is counted");
+    assert.match(out, /^1 source file,/m, "only the scoped subtree is counted");
     const h = line(out, "history     ");
-    assert.ok(/1 commits/.test(h), `history must be scoped too, got: ${h}`);
+    assert.ok(/\b1 commit\b/.test(h), `history must be scoped too, got: ${h}`);
   } finally { r.clean(); }
 });
 
@@ -553,7 +555,7 @@ test("no width of table fits the budget, and the smallest one is drawn anyway", 
     // when nothing fits, so a seed of twenty rows answered a budget of five
     // with twenty rows — the clamp hid it rather than preventing it.
     const table = renderL1({ dirs, hist: { available: false }, spans: [], budget: 5 });
-    const rows = table.split("\n").filter((l) => /^ {2}\d/.test(l));
+    const rows = table.split("\n").filter((l) => /^\s+\d+f\b/.test(l));
     assert.equal(rows.length, 1, `the smallest table there is, got ${rows.length} rows:\n${table}`);
     assert.match(table, /\+39 directories not shown/, "and it still says what it did not show");
   } finally { r.clean(); }
@@ -582,7 +584,7 @@ test("a repository with no git history still reports the filesystem facts", () =
   try {
     r.file("p/a.go", "x\n");
     const out = r.run();
-    assert.match(out, /^1 source files/m);
+    assert.match(out, /^1 source file,/m);
     assert.match(out, /history\s+not measured/);
   } finally { r.clean(); }
 });
@@ -592,7 +594,7 @@ test("binary and unreadable files do not crash the scan", () => {
   try {
     writeFileSync(join(r.dir, "blob.go"), Buffer.from([0, 1, 2, 3, 0, 255, 10]));
     r.file("p/ok.go", "x\n");
-    assert.match(r.run(), /source files/);
+    assert.match(r.run(), /source file/);
   } finally { r.clean(); }
 });
 
@@ -705,7 +707,7 @@ test("the active and dormant counts add up to the directories that exist", () =>
     r.file("stays/y.go", "2\n");
     r.commit("2024-02-01T00:00:00");
     const l = line(r.run("--since", "20.years"), "activity");
-    const m = l.match(/(\d+) touched in the last \d+ days, (\d+) not, (\d+) with no commit[^—]*— of (\d+) directories/);
+    const m = l.match(/(\d+) touched in the last \d+ days?, (\d+) not, (\d+) with no commit[^—]*— of (\d+) director/);
     assert.ok(m, `unexpected activity line: ${l}`);
     const [active, dormant, unseen, total] = m.slice(1, 5).map(Number);
     assert.equal(total, 1, "only one directory still exists");
@@ -725,7 +727,7 @@ test("a repository reached through a symlinked path is still scanned", () => {
     r.file("p/a.go", "x\n"); r.commit("2024-01-01T00:00:00");
     execFileSync("ln", ["-s", r.dir, link]);
     const out = execFileSync("node", [CLI, link, "--since", "20.years"], { encoding: "utf8", env: ENV, stdio: ["ignore", "pipe", "pipe"] });
-    assert.match(out, /^1 source files/m, "a symlinked path must resolve to the same repository, not to a subdirectory of it");
+    assert.match(out, /^1 source file,/m, "a symlinked path must resolve to the same repository, not to a subdirectory of it");
     assert.ok(!/paths are repository-relative/.test(out), "the repository root reached by a symlink is still the root");
   } finally { rmSync(link, { force: true }); r.clean(); }
 });
@@ -755,7 +757,12 @@ test("an acyclic result is scoped to what the analyzer saw, not to the tree", ()
     r.file("beta/b.go", "package beta\n");
     const out = r.run("--structure");
     assert.ok(!/graph is acyclic/.test(out), "a clean verdict must not come from the inexact module");
-    assert.match(out, /no group found in the \d+ packages/, "say what was searched, not what is true");
+    assert.match(out, /no mutually entangled group/, "say what was searched, not what is true");
+    // What was searched sits on the line above it, which is why the detail no
+    // longer repeats the same fact in other words two lines later.
+    assert.match(line(out, "dependencies"), /over 2 packages, via go list/, out);
+    assert.equal(out.match(/mutually entangled group/g).length, 1,
+      `one fact, said once: a second wording invites a difference that is not there:\n${out}`);
   } finally { r.clean(); }
 });
 
@@ -800,7 +807,7 @@ test("an unreadable file does not enter the inventory as zero lines", () => {
     const bad = r.file("p/bad.go", "x\n".repeat(10));
     execFileSync("chmod", ["000", bad]);
     const out = r.run();
-    assert.match(out, /^1 source files/m, "the unreadable file leaves the inventory");
+    assert.match(out, /^1 source file,/m, "the unreadable file leaves the inventory");
     assert.equal(field(line(out, "lines per file"), "median"), 10, "it must not drag the median to zero");
     execFileSync("chmod", ["644", bad]);
   } finally { r.clean(); }
@@ -982,7 +989,7 @@ test("a directory with no commit in the window is counted, not omitted", () => {
     // Present on disk, absent from the window: it belongs in the total.
     r.file("untracked/b.go", "x\n");
     const l = line(r.run("--since", "20.years"), "activity");
-    const m = l.match(/(\d+) touched[^,]*, (\d+) not, (\d+) with no commit[^—]*— of (\d+) directories/);
+    const m = l.match(/(\d+) touched[^,]*, (\d+) not, (\d+) with no commit[^—]*— of (\d+) director/);
     assert.ok(m, `unexpected activity line: ${l}`);
     assert.equal(Number(m[3]), 1, `the directory with no commit must be counted: ${l}`);
     assert.equal(Number(m[4]), 2);
@@ -1027,7 +1034,7 @@ test("a submodule's files are not counted as this repository's code", () => {
     const out = r.run();
     // Another repository's code borrowed into this tree is not this tree's
     // weight, and counting it moves every distribution it appears in.
-    assert.match(out, /^1 source files, 4 lines/m, `the submodule must be excluded, got: ${line(out, "source files")}`);
+    assert.match(out, /^1 source file, 4 lines/m, `the submodule must be excluded, got: ${line(out, "source file")}`);
     assert.doesNotMatch(out, /vendorlib/, "no submodule path may appear as a subject of this repository");
   } finally { r.clean(); }
 });
@@ -1146,7 +1153,7 @@ test("a measured dependency graph appears in the default view, not only under --
     r.file("a/x/x.go", "package x\n");
     r.file("main.go", 'package main\nimport _ "example.com/root/a/x"\nfunc main(){}\n');
     const l = line(r.run(), "dependencies");
-    assert.match(l, /1 edges over 2 packages/, `the orient view must carry the graph: ${l}`);
+    assert.match(l, /1 edge over 2 packages/, `the orient view must carry the graph: ${l}`);
     // The bug this covers rendered the literal string "undefined" here while
     // every other test stayed green.
     assert.doesNotMatch(l, /undefined|not measured/, l);
@@ -1173,9 +1180,9 @@ test("a Go backend and a TS frontend are two spans, not one winner", () => {
     // never whether it exists.
     assert.ok(go, `the Go span is missing:\n${out}`);
     assert.ok(node, `the Node span is missing:\n${out}`);
-    if (hasGo()) assert.match(go, /1 edges over 2 packages, via go list/, go);
+    if (hasGo()) assert.match(go, /1 edge over 2 packages, via go list/, go);
     else assert.match(go, /go is not on PATH/, go);
-    if (hasMadge()) assert.match(node, /1 edges over 2 file directories, via madge/, node);
+    if (hasMadge()) assert.match(node, /1 edge over 2 file directories, via madge/, node);
     else assert.match(node, /not measured — \S/, node);
     assert.ok(!/no analyzer applies/.test(out), `two declared ecosystems cannot be no ecosystems:\n${out}`);
   } finally { r.clean(); }
@@ -1192,7 +1199,7 @@ test("a split-tree monorepo roots each analyzer at its own ecosystem", { skip: !
     r.file("api/pyproject.toml", '[project]\nname = "api"\n');
     r.file("api/pkg/__init__.py", "x = 1\n");
     const out = r.run("--structure");
-    assert.match(line(out, "dependencies (Go)"), /1 edges over 2 packages/, `the Go module is under backend/, not at the root:\n${out}`);
+    assert.match(line(out, "dependencies (Go)"), /1 edge over 2 packages/, `the Go module is under backend/, not at the root:\n${out}`);
     // grimp is named only by an analyzer that was rooted where the pyproject
     // is. Rooted at the ancestor of every manifest it would find no project.
     assert.match(line(out, "dependencies (Python)"), /grimp/, `Python must be analysed at api/:\n${out}`);
@@ -1328,7 +1335,7 @@ test("a subdirectory scan filters the span to the scope and states the crossing 
     const l = line(out, "dependencies");
     // The module is measured whole — an analyzer rooted at the subdirectory
     // finds no go.mod — and presented at the scope that was asked for.
-    assert.match(l, /1 edges over 2 packages/, `the span must be confined to the scope: ${l}\n${out}`);
+    assert.match(l, /1 edge over 2 packages/, `the span must be confined to the scope: ${l}\n${out}`);
     const b = line(out, "crossings");
     assert.ok(b, `a confined span must state what crosses the line:\n${out}`);
     assert.match(b, /1 inbound from outside internal\/world \(top: cmd\/cotx\)/, b);
@@ -1599,4 +1606,352 @@ test("compare on a file that is not a snapshot is refused, naming what it expect
     assert.ok(e2 !== null, "a record with no version is not a snapshot");
     assert.match(e2, /no version field/, e2);
   } finally { rmSync(bad, { force: true }); rmSync(old, { force: true }); r.clean(); }
+});
+
+// ── The command line: what was typed, and what ran ───────────────────────────
+//
+// Every departure between the two is carried out of parse() rather than made
+// quietly. A reader who typed a number and was shown the output of a different
+// one had nothing on the page to tell them so.
+
+// Whatever a successful run wrote to stderr. Notices live there beside the
+// token bound, because stdout is measurements and a message in that stream
+// would be read as one.
+const stderrOf = (r, ...args) =>
+  spawnSync("node", [CLI, r.dir, ...args], { encoding: "utf8", env: ENV }).stderr;
+
+test("an unknown flag is refused by name rather than ignored", () => {
+  const r = repo();
+  try {
+    r.file("p/a.go", "x\n");
+    const err = refused(() => r.run("--bogus"));
+    assert.ok(err !== null, "a flag this tool does not know must not be swallowed");
+    assert.match(err, /--bogus is not a flag/, err);
+    assert.match(err, /--help/, `the refusal must name the remedy: ${err}`);
+  } finally { r.clean(); }
+});
+
+test("a flag whose value is missing is refused, not filled from the default", () => {
+  const r = repo();
+  try {
+    r.file("p/a.go", "x\n");
+    for (const flag of ["--since", "--budget", "--windows", "--cap", "--top", "--dir"]) {
+      const err = refused(() => r.run(flag));
+      assert.ok(err !== null, `${flag} with no value must be refused, not defaulted`);
+      assert.ok(err.includes(`${flag} needs a value`), `${flag}: ${err}`);
+    }
+    // The next token being another flag is the same absence, one step quieter.
+    const err = refused(() => r.run("--budget", "--structure"));
+    assert.match(err ?? "", /--budget needs a value/, String(err));
+  } finally { r.clean(); }
+});
+
+test("a value that is not a number is refused rather than read as the default", () => {
+  const r = repo();
+  try {
+    r.file("p/a.go", "x\n");
+    // `Number(x) || default` gave --budget wide and --budget 1600 one page.
+    const err = refused(() => r.run("--budget", "wide"));
+    assert.ok(err !== null, "a typo must not resolve to the default");
+    assert.match(err, /--budget wide is not a number/, err);
+  } finally { r.clean(); }
+});
+
+test("a clamped value says which number was used", () => {
+  const r = repo();
+  try {
+    for (let i = 0; i < 40; i++) r.file(`d${i}/f.go`, "x\n");
+    assert.match(stderrOf(r, "--structure", "--budget", "0"),
+      /--budget 0 is below the floor of 200; using 200/,
+      "a clamp the reader cannot see is a number they did not ask for");
+    assert.match(stderrOf(r, "--windows", "99"), /--windows 99 is above the ceiling of 12; using 12/);
+    assert.ok(!/using/.test(stderrOf(r, "--budget", "1600")), "a value inside the bounds is not news");
+  } finally { r.clean(); }
+});
+
+test("a second repository is refused rather than silently dropped", () => {
+  const r = repo();
+  try {
+    r.file("p/a.go", "x\n");
+    const err = refused(() => r.run(r.dir));
+    assert.ok(err !== null, "the second path was taken as the first and the rest dropped");
+    assert.match(err, /2 repositories were given/, err);
+  } finally { r.clean(); }
+});
+
+test("--dir names the flags it is ignoring", () => {
+  const r = repo();
+  try {
+    r.file("keep/a.go", "x\n");
+    const err = stderrOf(r, "--dir", "keep", "--structure", "--budget", "900");
+    assert.match(err, /--dir prints one subtree and stops/, err);
+    assert.match(err, /--structure, --budget/, err);
+    assert.ok(!/no effect here/.test(stderrOf(r, "--dir", "keep")), "a flag nobody typed is not being ignored");
+  } finally { r.clean(); }
+});
+
+// ── Disclosure: every truncation states what it dropped ──────────────────────
+
+test("the language list says how many extensions it did not name", () => {
+  const r = repo();
+  try {
+    for (const [i, e] of [".go", ".py", ".ts", ".rb", ".rs", ".java", ".kt"].entries()) r.file(`p/f${i}${e}`, "x\n");
+    const l = line(r.run(), "languages");
+    assert.match(l, /\+2 more/, `seven extensions and five named: ${l}`);
+  } finally { r.clean(); }
+});
+
+test("the test-convention list says how many conventions it did not name", () => {
+  const r = repo();
+  try {
+    for (let i = 0; i < 4; i++) {
+      r.file(`p/a${i}_test.go`, "x\n");
+      r.file(`p/b${i}.spec.ts`, "x\n");
+      r.file(`p/c${i}.test.ts`, "x\n");
+    }
+    const l = line(r.run(), "tests       ");
+    assert.match(l, /\+1 more/, `three conventions cleared the vote and two are named: ${l}`);
+  } finally { r.clean(); }
+});
+
+test("the largest-directories list says how many directories it did not rank", () => {
+  const r = repo();
+  try {
+    for (let i = 0; i < 20; i++) r.file(`d${i}/f.go`, "x\n");
+    for (let i = 0; i < 9; i++) r.file(`wide/f${i}.go`, "x\n");
+    assert.match(r.run(), /\+16 more directories, all smaller/, "five of twenty-one, and the list stopped without saying so");
+  } finally { r.clean(); }
+});
+
+test("relocations say how many moves they did not show", () => {
+  const r = repo(); r.init();
+  try {
+    for (let d = 0; d < 10; d++) for (let i = 0; i < 4; i++) r.file(`old${d}/f${i}.go`, `body ${i}\n`.repeat(20));
+    r.commit("2024-01-01T00:00:00");
+    for (let d = 0; d < 10; d++) r.git("mv", `old${d}`, `new${d}`);
+    r.commit("2024-02-01T00:00:00");
+    assert.match(r.run("--since", "20.years"), /\+2 moves not shown/, "ten moves, eight shown");
+  } finally { r.clean(); }
+});
+
+test("co-change states the floor it applied and how many pairs cleared it unseen", () => {
+  const r = repo(); r.init();
+  try {
+    // Four directories moving together: six pairs, every one above the floor.
+    for (let i = 0; i < 6; i++) {
+      for (const d of ["a", "b", "c", "d"]) r.file(`${d}/f.go`, `${i}\n`);
+      r.commit(`2024-0${i + 1}-01T00:00:00`);
+    }
+    const out = r.run("--since", "20.years", "--top", "2");
+    assert.match(out, /clears 0\.5 votes over 3 commits/,
+      `the floor was a literal in scan.mjs and appeared nowhere in the output:\n${out}`);
+    assert.match(out, /\+4 pairs above that floor, not shown \(--top 2\)/, out);
+  } finally { r.clean(); }
+});
+
+test("the entangled-group list says how many groups it did not show", () => {
+  const r = repo();
+  try {
+    for (const [a, b] of [["A", "B"], ["C", "D"], ["E", "F"], ["G", "H"]]) {
+      csproj(r, a, b); csproj(r, b, a);
+      r.file(`${a}/${a.toLowerCase()}.cs`, `class ${a} {}`);
+      r.file(`${b}/${b.toLowerCase()}.cs`, `class ${b} {}`);
+    }
+    const out = r.run("--structure");
+    assert.match(out, /4 mutually entangled groups/, out);
+    assert.match(out, /\+1 more group\b/, `three groups shown of four:\n${out}`);
+  } finally { r.clean(); }
+});
+
+test("the structure header says when the budget trimmed the table", () => {
+  const r = repo();
+  try {
+    for (let i = 0; i < 200; i++) r.file(`d${i}/f.go`, "x\n".repeat(i + 1));
+    assert.match(r.run("--structure", "--budget", "300"), /every directory the budget admits, largest first/,
+      "the promise was printed above a table that had already dropped most of the tree");
+    const big = r.run("--structure", "--budget", "20000");
+    assert.match(big, /structure {3}every directory, largest first/, big);
+    assert.ok(!/the budget admits/.test(big), "nothing was trimmed, so nothing may say it was");
+  } finally { r.clean(); }
+});
+
+test("a history record that does not parse is counted, not dropped in silence", () => {
+  const r = repo(); r.init();
+  try {
+    r.file("p/ok.go", "x\n"); r.commit("2024-01-01T00:00:00");
+    // A path holding the byte this parser separates records on. git emits it
+    // raw under core.quotePath=false, so that commit's record arrives in two
+    // pieces and the second piece is not a commit.
+    r.file(`p/a\u0001b.go`, "x\n"); r.commit("2024-02-01T00:00:00");
+    assert.match(r.run("--since", "20.years"), /1 history record did not parse and was skipped/,
+      "a parser that skips in silence cannot be told from a repository with nothing there");
+  } finally { r.clean(); }
+});
+
+test("a manifest the noise rules refuse is counted and disclosed", () => {
+  const r = repo();
+  try {
+    // The two silent drops: a private package.json with no source directory
+    // beside it, and a scaffold. The section said "none found" for both, as
+    // though the repository declared nothing at all.
+    r.file("package.json", '{"private":true,"version":"0.0.0"}');
+    r.file("tools/x.js", "export const x = 1;\n");
+    r.file("packages/template-vue/package.json", '{"name":"tmpl","version":"1.0.0"}');
+    r.file("packages/template-vue/src/main.js", "export const y = 1;\n");
+    assert.match(r.run(), /\+2 filtered: 1 declaring no module of its own, 1 on a scaffold or fixture path/,
+      "the name-collision drop already disclosed; these two did not");
+  } finally { r.clean(); }
+});
+
+test("a binary file is not counted as source, and the drop is disclosed", () => {
+  const r = repo();
+  try {
+    r.file("p/real.go", "x\n".repeat(10));
+    // Newline bytes inside compiled output are not lines. Counted, this file
+    // entered the total, the median and the p90 carrying a line count that is
+    // a fact about its encoding and not about any code.
+    writeFileSync(join(r.dir, "p", "blob.go"), Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0, 0, 10, 10, 10, 10, 10, 0, 10]));
+    const out = r.run();
+    assert.match(out, /^1 source file, 10 lines/m, `a fabricated line count must not enter the totals:\n${out}`);
+    assert.equal(field(line(out, "lines per file"), "median"), 10, "nor the distribution");
+    assert.match(out, /1 file with a source extension and no line count \(1 binary\)/, out);
+  } finally { r.clean(); }
+});
+
+// ── What the page spends on saying nothing ──────────────────────────────────
+
+test("a single-author repository states it once and drops the share column", () => {
+  const r = repo(); r.init();
+  try {
+    for (let i = 0; i < 4; i++) r.file(`p${i}/f.go`, "x\n");
+    r.commit("2024-01-01T00:00:00", "Ann");
+    for (let i = 0; i < 3; i++) { r.file("p0/f.go", `${i}\n`); r.commit(`2024-0${i + 2}-01T00:00:00`, "Ann"); }
+    const out = r.run("--since", "20.years", "--structure");
+    assert.match(out, /one author holds every directory's commits/, out);
+    assert.ok(!/%\/\d+a/.test(out), `the column was the same two figures on every row:\n${out}`);
+    const header = out.split("\n").find((l) => /^ {2}files\b/.test(l));
+    assert.ok(header && !/share/.test(header), `and the header may not name a column that is not there: ${header}`);
+  } finally { r.clean(); }
+});
+
+test("a repository with more than one author keeps the share column", () => {
+  const r = repo(); r.init();
+  try {
+    r.file("p/f.go", "x\n"); r.commit("2024-01-01T00:00:00", "Ann");
+    r.file("p/f.go", "1\n"); r.commit("2024-02-01T00:00:00", "Bob");
+    const out = r.run("--since", "20.years", "--structure");
+    assert.ok(/%\/\d+a/.test(out), `a share that varies is a figure, not noise:\n${out}`);
+    assert.ok(!/one author holds every directory/.test(out), out);
+  } finally { r.clean(); }
+});
+
+test("the structure header sits over the columns it names", () => {
+  const r = repo(); r.init();
+  try {
+    for (let i = 0; i < 3; i++) r.file(`p${i}/f.go`, "x\n".repeat(1000 * (i + 1)));
+    r.commit("2024-01-01T00:00:00", "Ann");
+    r.file("p0/f.go", "z\n"); r.commit("2024-02-01T00:00:00", "Bob");
+    const lines = r.run("--since", "20.years", "--structure").split("\n");
+    const i = lines.findIndex((l) => /^ {2}files\b/.test(l));
+    assert.ok(i >= 0, `the structure table must be present:\n${lines.join("\n")}`);
+    // A column is a position. Header and cells come from one set of widths, so
+    // each name must end where the figure under it ends — the fixed header
+    // string named one column while standing over another on every table.
+    const ends = (l) => [...l.matchAll(/\S+/g)].map((m) => m.index + m[0].length);
+    const head = ends(lines[i]).slice(0, -1);            // every column but "directory"
+    assert.deepEqual(ends(lines[i + 1]).slice(0, head.length), head,
+      `header\n${lines[i]}\nrow\n${lines[i + 1]}`);
+  } finally { r.clean(); }
+});
+
+test("a count of one takes a singular noun", () => {
+  const r = repo(); r.init();
+  try {
+    r.file("p/a.go", "x\n"); r.commit("2024-01-01T00:00:00");
+    const out = r.run("--since", "20.years");
+    for (const wrong of ["1 source files", "1 lines", "1 directories", "1 commits", "1 days", "1 pairs"]) {
+      assert.ok(!out.includes(wrong), `"${wrong}" is a defect the reader corrects on every line carrying it:\n${out}`);
+    }
+    assert.match(out, /^1 source file, 1 line, 1 directory/m, out);
+    assert.match(out, /1 commit touching source/, out);
+  } finally { r.clean(); }
+});
+
+test("a maximum over a large array does not depend on the argument-list ceiling", () => {
+  // Called directly: the cliff sits around 120,000 elements, and no fixture
+  // this suite builds has a repository that wide. Math.max over a spread is an
+  // argument list, and an argument list stops working there.
+  const xs = Array.from({ length: 200000 }, (_, i) => i % 977);
+  assert.equal(maxOf(xs), 976);
+  assert.throws(() => Math.max(0, ...xs), RangeError, "the spread this replaced does not survive the same array");
+});
+
+// ── Transitive reach ────────────────────────────────────────────────────────
+
+test("a high-fan-out node says how much of the graph it reaches", () => {
+  const r = repo();
+  try {
+    // A reaches B, C and D directly, and B carries a tail: E, then F. Direct
+    // fan-out is three; what a change to A arrives at is five.
+    for (const n of ["A", "B", "C", "D", "E", "F"]) r.file(`${n}/${n.toLowerCase()}.cs`, `class ${n} {}`);
+    r.file("A/A.csproj", `<Project><ItemGroup>${["B", "C", "D"].map((d) => `<ProjectReference Include="../${d}/${d}.csproj" />`).join("")}</ItemGroup></Project>`);
+    csproj(r, "B", "E"); csproj(r, "E", "F");
+    csproj(r, "C", null); csproj(r, "D", null); csproj(r, "F", null);
+    const out = r.run("--structure");
+    const l = line(out, "fan-out   3");
+    assert.ok(l, `the fan-out row must be present:\n${out}`);
+    assert.match(l, /reaches 5 of 6/, `a reader pricing a split needs the transitive count, not the direct one: ${l}`);
+  } finally { r.clean(); }
+});
+
+// ── Provenance ──────────────────────────────────────────────────────────────
+
+test("the analyzer names the toolchain that produced the graph", { skip: !hasGo() }, () => {
+  const r = repo();
+  try {
+    r.file("go.mod", "module example.com/m\n\ngo 1.21\n");
+    r.file("alpha/a.go", 'package alpha\n\nimport _ "example.com/m/beta"\n');
+    r.file("beta/b.go", "package beta\n");
+    const l = line(r.run(), "dependencies");
+    // Two Go releases do not always resolve one module alike, so a reader
+    // checking this figure on their own machine has to see which go answered.
+    assert.match(l, /via go list -e -mod=readonly \(go\d+(\.\d+)*\)/, l);
+  } finally { r.clean(); }
+});
+
+test("every fetch of madge names the version it runs", () => {
+  // An unpinned `npx madge` resolves to whatever the cache holds, which makes
+  // the graph a fact about the machine rather than about the repository. The
+  // pin has to travel with every place that fetches it, or one of them runs a
+  // different analyzer and nothing on the page says which.
+  // The bare name comes out of the pin rather than being written here: this
+  // file is one of the files it reads, and a literal would match itself.
+  const [bare] = MADGE.split("@");
+  const unpinned = new RegExp(`(?:["']${bare}["']|npx [^\\n]*?\\b${bare}\\b(?!@))`, "g");
+  for (const f of ["skills/loadpath/scripts/deps.mjs", "tests/measure.mjs", "tests/loadpath.test.mjs", ".github/workflows/ci.yml"]) {
+    // Comments are prose about this very problem — two of these files carry a
+    // paragraph naming the unpinned form — so what is read here is the code.
+    const src = readFileSync(join(HERE, "..", f), "utf8").replace(/^\s*(?:\/\/|#).*$/gm, "");
+    for (const m of src.matchAll(unpinned)) assert.fail(`${f} fetches ${bare} unpinned: ${m[0]}`);
+  }
+  assert.match(MADGE, /^[a-z-]+@\d+\.\d+\.\d+$/, `the pin must name an exact version, got ${MADGE}`);
+});
+
+test("the token bound states the divisor it used, and the divisor is not optimistic", () => {
+  const r = repo();
+  try {
+    for (let i = 0; i < 12; i++) r.file(`d${i}/f.go`, "x\n".repeat(20 + i));
+    const res = spawnSync("node", [CLI, r.dir], { encoding: "utf8", env: ENV });
+    const m = /≤(\d+) tokens \(upper bound: characters \/ ([\d.]+)/.exec(res.stderr);
+    assert.ok(m, `the bound must state the divisor it used: ${res.stderr}`);
+    // The bound is the text it was taken over, divided by the divisor it names.
+    // console.log adds the newline that is not part of the measured text.
+    assert.equal(Number(m[1]), Math.round((res.stdout.length - 1) / Number(m[2])),
+      "the number printed must be the arithmetic the line describes");
+    // Calibrated with tiktoken against this tool's densest output, which
+    // measured 2.66 characters per token for a structure table body. A divisor
+    // above that is optimistic on exactly the half --budget trims, and a budget
+    // that can be exceeded is not a budget. A general "about 3.6" was 36% out.
+    assert.ok(Number(m[2]) <= 2.66, `the divisor must sit under the densest shape it covers, got ${m[2]}`);
+  } finally { r.clean(); }
 });

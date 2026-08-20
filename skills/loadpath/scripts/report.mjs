@@ -6,35 +6,64 @@
 // means nothing until `median 7` is on the page, and then it means 19x the
 // median — a fact about the distribution, exact and checkable.
 
-import { dirname, basename } from "node:path";
-import { median, pct, day, num, tokens } from "./scan.mjs";
+import { dirname } from "node:path";
+import { median, pct, day, num, count, maxOf, tokens, CO_FLOOR, CO_SUPPORT } from "./scan.mjs";
+
+// Every truncation states what it dropped. A list that ends without a "+N more"
+// is claiming to be the whole list, and that claim is checked the same way any
+// other one here is. One spelling of it, so no section can quietly stop
+// disclosing while the others go on doing it.
+const more = (n, what = "more") => (n > 0 ? `, +${n} ${what}` : "");
+
+// How many of each capped list survives. Named, because a slice with a literal
+// in it is a threshold the reader cannot see and the writer forgets.
+const LANGS = 5, CONVS = 2, LARGEST = 5, RELOCS = 8, TANGLES = 3, FANOUT = 3;
+
+// One author holding every directory's commits. The share column then prints
+// the same two figures on every row — measured at 54 rows of it on this
+// repository — which is a column of noise wide enough to cost real output. It
+// is a fact about the repository, so it is stated once and the column goes.
+const singleAuthor = (hist) =>
+  Boolean(hist.available && hist.dirs?.size) &&
+  [...hist.dirs.values()].every((e) => e.topShare === 1 && e.majorAuthors === 1);
 
 // ── L0: orient ───────────────────────────────────────────────────────────────
 
-export function renderL0({ files, dirs, conv, hist, mans, filtered = [], spans, scattered = [], root, since, windows }) {
+export function renderL0({ files, dirs, conv, hist, mans, filtered = [], noise = [], spans, scattered = [], since }) {
   const out = [];
   const fileCounts = [...dirs.values()].map((d) => d.files);
   const lineCounts = files.map((f) => f.lines);
   const totalLines = files.reduce((s, f) => s + f.lines, 0);
   const tests = files.filter((f) => conv.isTest(f.path)).length;
-  const depth = Math.max(0, ...[...dirs.keys()].map((d) => (d ? d.split("/").length : 0)));
+  const depth = maxOf([...dirs.keys()].map((d) => (d ? d.split("/").length : 0)));
 
   const ext = new Map();
   for (const f of files) {
     const e = f.path.slice(f.path.lastIndexOf("."));
     ext.set(e, (ext.get(e) || 0) + 1);
   }
-  const langs = [...ext.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
-    .map(([e, n]) => `${e}×${n}`).join(", ");
+  const byCount = [...ext.entries()].sort((a, b) => b[1] - a[1]);
+  const langs = byCount.slice(0, LANGS).map(([e, n]) => `${e}×${n}`).join(", ")
+    + more(byCount.length - LANGS);
 
-  out.push(`${num(files.length)} source files, ${num(totalLines)} lines, ${dirs.size} directories, ${depth} deep`);
+  out.push(`${count(files.length, "source file")}, ${count(totalLines, "line")}, ${count(dirs.size, "directory", "directories")}, ${depth} deep`);
   out.push(`languages   ${langs}`);
   out.push(conv.winners.length
-    ? `tests       ${num(tests)} files by ${conv.winners.slice(0, 2).map((w) => w.name).join(" and ")}`
+    ? `tests       ${count(tests, "file")} by ${conv.winners.slice(0, CONVS).map((w) => w.name).join(" and ")}${more(conv.winners.length - CONVS)}`
     : `tests       no test-path convention detected`);
   out.push("");
-  out.push(`files per directory   median ${median(fileCounts)}   p90 ${pct(fileCounts, 0.9)}   max ${Math.max(...fileCounts)}`);
-  out.push(`lines per file        median ${median(lineCounts)}   p90 ${pct(lineCounts, 0.9)}   max ${Math.max(...lineCounts)}`);
+  out.push(`files per directory   median ${median(fileCounts)}   p90 ${pct(fileCounts, 0.9)}   max ${maxOf(fileCounts)}`);
+  out.push(`lines per file        median ${median(lineCounts)}   p90 ${pct(lineCounts, 0.9)}   max ${maxOf(lineCounts)}`);
+  // Files that exist, carry a source extension, and are in none of the figures
+  // above. What a measurement refused is part of the measurement: a binary file
+  // used to enter the total, the median and the p90 carrying a count of its
+  // newline bytes, which is a number about its encoding and not about its code.
+  const withheld = (files.unreadable?.length ?? 0) + (files.binary?.length ?? 0);
+  if (withheld) {
+    const why = [files.unreadable?.length ? `${files.unreadable.length} unreadable` : "",
+                 files.binary?.length ? `${files.binary.length} binary` : ""].filter(Boolean).join(", ");
+    out.push(`not counted           ${count(withheld, "file")} with a source extension and no line count (${why})`);
+  }
   // Named the same way the distribution lines are: the unit once, then the
   // rows. An absence is stated rather than left as a missing line, because a
   // section that vanishes when it finds nothing cannot be told from one that
@@ -52,12 +81,16 @@ export function renderL0({ files, dirs, conv, hist, mans, filtered = [], spans, 
     // What the count counts. A commit touching only documentation is not in
     // it, and a bare "N commits" invites the reader to reconcile it with a
     // number git would give them.
-    out.push(`history     ${num(hist.commits.length)} commits touching source since ${hist.cutoffDay} (${asked}), spanning ${days} days`);
+    out.push(`history     ${count(hist.commits.length, "commit")} touching source since ${hist.cutoffDay} (${asked}), spanning ${count(days, "day")}`);
     // The split, the horizon and the join against the tree are all measured in
     // scan.mjs; this line spends them.
-    out.push(`activity    ${hist.active} touched in the last ${hist.horizonDays} days, ${hist.dormant} not, ` +
-             `${hist.unseen} with no commit in this window at all — of ${dirs.size} directories`);
+    out.push(`activity    ${hist.active} touched in the last ${count(hist.horizonDays, "day")}, ${hist.dormant} not, ` +
+             `${hist.unseen} with no commit in this window at all — of ${count(dirs.size, "directory", "directories")}`);
     if (hist.dormant || hist.unseen) out.push(`            a directory with no recent commit is unmeasured here, not known to be safe`);
+    // A record git holds that this parser could not read. Counting them is what
+    // separates a repository with nothing there from a parser that lost it.
+    if (hist.skipped) out.push(`            ${count(hist.skipped, "history record")} did not parse and ${hist.skipped === 1 ? "was" : "were"} skipped`);
+    if (singleAuthor(hist)) out.push(`            one author holds every directory's commits, so the share is dropped from the rows below`);
   } else {
     out.push(`history     not measured — ${hist.reason}`);
   }
@@ -80,7 +113,17 @@ export function renderL0({ files, dirs, conv, hist, mans, filtered = [], spans, 
     const which = names.length === 1
       ? `one name (${names[0]})`
       : `${names.length} names (${names.slice(0, 3).join(", ")}${names.length > 3 ? ", …" : ""})`;
-    out.push(`  +${filtered.length} filtered: ${filtered.length} manifests share ${which}`);
+    out.push(`  +${filtered.length} filtered: ${count(filtered.length, "manifest")} share ${which}`);
+  }
+  // The other two drops. A repository whose only package.json is a workspace
+  // glob printed "none found" and read as one that declares nothing at all —
+  // the same silence the name-collision line was added to break.
+  if (noise.length) {
+    const shapeless = noise.filter((m) => m.why === "shape").length;
+    const scaffold = noise.length - shapeless;
+    const why = [shapeless ? `${shapeless} declaring no module of its own` : "",
+                 scaffold ? `${scaffold} on a scaffold or fixture path` : ""].filter(Boolean).join(", ");
+    out.push(`  +${noise.length} filtered: ${why}`);
   }
 
   out.push("");
@@ -93,7 +136,7 @@ export function renderL0({ files, dirs, conv, hist, mans, filtered = [], spans, 
   // what makes 136f mean something — it is a ratio against a figure printed
   // above it, which is a different job from choosing the order.
   const med = median(fileCounts) || 1;
-  const ranked = [...dirs.values()].sort((a, b) => b.files - a.files).slice(0, 5);
+  const ranked = [...dirs.values()].sort((a, b) => b.files - a.files).slice(0, LARGEST);
   out.push("");
   // With a flat distribution every ratio is 1 and the sort is a no-op, so the
   // rows would be insertion order presented as outliers.
@@ -102,11 +145,15 @@ export function renderL0({ files, dirs, conv, hist, mans, filtered = [], spans, 
     return out.join("\n");
   }
   out.push(`largest directories, against the median`);
+  // Where one author holds everything, "top author 100%" is the same phrase on
+  // every row and the count beside it is the only figure that varies.
+  const one = singleAuthor(hist);
   for (const d of ranked) {
     const h = hist.available ? hist.dirs.get(d.path) : null;
-    const share = h ? `  top author ${Math.round(h.topShare * 100)}% of ${h.commits}c` : "";
+    const share = h ? (one ? `  ${h.commits}c` : `  top author ${Math.round(h.topShare * 100)}% of ${h.commits}c`) : "";
     out.push(`  ${String(d.files).padStart(4)}f  ${(d.files / med).toFixed(0)}× median   ${num(d.lines).padStart(8)}L   ${d.path || "."}${share}`);
   }
+  if (dirs.size > ranked.length) out.push(`  +${dirs.size - ranked.length} more directories, all smaller`);
   return out.join("\n");
 }
 
@@ -123,56 +170,72 @@ export function renderL1({ dirs, hist, spans, budget }) {
   const groups = entangledGroups(spans);
   const layerOf = new Map();
   for (const s of spans) if (s.measured) for (const [n, l] of s.layerOf) layerOf.set(n, l);
+  // Two columns exist only when they can carry a figure: the share where more
+  // than one author holds the commits, the layer where some analyzer answered.
+  // A column of one repeated value, or of nothing at all, is width every row
+  // pays for and no row uses.
+  const share = !singleAuthor(hist);
+  const layered = layerOf.size > 0;
+
+  const names = ["files", "lines", "tests", hist.available ? "commits" : "?"];
+  if (share) names.push(hist.available ? "share/a" : "?");
+  names.push(hist.available ? "touched" : "?");
+  if (layered) names.push("layer");
+
   const rows = [...dirs.values()].map((d) => {
     const h = hist.available ? hist.dirs.get(d.path) : null;
     const grp = layerOf.has(d.path)
       ? { layer: layerOf.get(d.path), group: groups.get(d.path) } : null;
-    return {
-      path: d.path || ".",
-      mass: d.lines,
-      cells: [
-        `${d.files}f`,
-        `${num(d.lines)}L`,
-        d.tests ? `${d.tests}t` : "-",
-        // A blank cell under a "commits" header reads as zero. Where history
-        // is unavailable the column says so once, in the header, and every
-        // cell carries the same mark rather than an absence.
-        hist.available ? (h ? `${h.commits}c` : "0c") : "?",
-        hist.available ? (h ? `${Math.round(h.topShare * 100)}%/${h.majorAuthors}a` : "-") : "?",
-        hist.available ? (h ? day(h.last) : "-") : "?",
-        grp ? `L${grp.layer}${grp.group ? " g" + grp.group : ""}` : "",
-      ],
-    };
+    const cells = [
+      `${d.files}f`,
+      `${num(d.lines)}L`,
+      d.tests ? `${d.tests}t` : "-",
+      // A blank cell under a "commits" header reads as zero. Where history
+      // is unavailable the column says so once, in the header, and every
+      // cell carries the same mark rather than an absence.
+      hist.available ? (h ? `${h.commits}c` : "0c") : "?",
+    ];
+    if (share) cells.push(hist.available ? (h ? `${Math.round(h.topShare * 100)}%/${h.majorAuthors}a` : "-") : "?");
+    cells.push(hist.available ? (h ? day(h.last) : "-") : "?");
+    if (layered) cells.push(grp ? `L${grp.layer}${grp.group ? " g" + grp.group : ""}` : "-");
+    return { path: d.path || ".", mass: d.lines, cells };
   }).sort((a, b) => b.mass - a.mass);
 
   const draw = (n) => {
     const keep = rows.slice(0, n);
-    const w = [0, 0, 0, 0, 0, 0, 0];
+    // The header is laid out from the widths its own cells produced. A fixed
+    // header string sat over whatever the padding happened to make, and named
+    // one column while standing above another on every table this has printed.
+    const w = names.map((h) => h.length);
     for (const r of keep) r.cells.forEach((c, i) => (w[i] = Math.max(w[i], c.length)));
     const lines = keep.map((r) =>
       "  " + r.cells.map((c, i) => c.padStart(w[i])).join(" ") + "  " + r.path);
     const rest = rows.length - keep.length;
     if (rest > 0) {
       const rf = rows.slice(n).reduce((s, r) => s + Number(r.cells[0].replace("f", "")), 0);
-      lines.push(`  +${rest} directories not shown (${rf} files)`);
+      lines.push(`  +${count(rest, "directory", "directories")} not shown (${count(rf, "file")})`);
     }
-    return lines.join("\n");
+    const head = "  " + names.map((h, i) => h.padStart(w[i])).join(" ") + "  directory"
+      + (hist.available ? "" : "   (? = history not measured)");
+    return [head, ...lines].join("\n");
   };
 
   // Binary search to the budget, within about 15%. The seed is the smallest
   // table there is: seeded at twenty rows it survives untouched when no size
   // fits, and the table then answers a budget of five with 265 tokens. The
   // CLI clamps --budget at 200 and so cannot reach that, which hid it.
-  let lo = 1, hi = rows.length, best = draw(1);
+  let lo = 1, hi = rows.length, best = draw(1), kept = 1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
     const s = draw(mid);
-    if (tokens(s) <= budget) { best = s; lo = mid + 1; } else hi = mid - 1;
+    if (tokens(s) <= budget) { best = s; kept = mid; lo = mid + 1; } else hi = mid - 1;
   }
-  const head = hist.available
-    ? "  files lines tests commits share/authors last-touched layer  directory"
-    : "  files lines tests   (? = history not measured)                  directory";
-  return [head, best].join("\n");
+  // "every directory" stops being true the moment the budget trims one, and
+  // the promise was printed above a table that had already dropped a third of
+  // the tree. The section names what it actually shows.
+  return [kept < rows.length
+    ? "structure   every directory the budget admits, largest first"
+    : "structure   every directory, largest first", best].join("\n");
 }
 
 // ── Co-change ────────────────────────────────────────────────────────────────
@@ -186,24 +249,33 @@ export function renderCoChange(hist, top) {
   if (!hist.available) return `co-change   not measured — ${hist.reason}`;
   const out = [];
   const breadths = hist.commits.map((c) => new Set(c.paths.map((p) => dirname(p))).size).sort((a, b) => a - b);
-  out.push(`co-change   ${hist.commits.length} commits, median ${median(breadths)} directories each, ${hist.windows} equal time windows`);
-  if (hist.capped) out.push(`            ${hist.capped} commits touched more than the breadth cap and were excluded as sweeps`);
-  if (hist.dropped) out.push(`            ${hist.dropped} pairs named a directory the tree no longer has and were dropped`);
-  if (!hist.pairs.length) { out.push("            no pair above the reporting floor"); return out.join("\n"); }
+  const floor = `${CO_FLOOR} votes over ${count(CO_SUPPORT, "commit")}`;
+  out.push(`co-change   ${count(hist.commits.length, "commit")}, median ${count(median(breadths), "directory", "directories")} each, ${count(hist.windows, "equal time window")}`);
+  if (hist.capped) out.push(`            ${count(hist.capped, "commit")} touched more than the breadth cap and ${hist.capped === 1 ? "was" : "were"} excluded as sweeps`);
+  if (hist.dropped) out.push(`            ${count(hist.dropped, "pair")} named a directory the tree no longer has and ${hist.dropped === 1 ? "was" : "were"} dropped`);
+  // The floor travels with the sentence about it, in both directions: a reader
+  // who sees nothing needs to know what nothing means here, and a reader who
+  // sees rows needs to know what the rows had to clear. It was a literal in
+  // scan.mjs and appeared nowhere in the output at all.
+  if (!hist.pairs.length) { out.push(`            no pair reached the floor of ${floor}`); return out.join("\n"); }
   out.push("");
   out.push(`  Each commit casts one vote, split across the pairs it implies. "share" is`);
-  out.push(`  that vote-sum over the commits of whichever directory moved less often.`);
+  out.push(`  that vote-sum over the commits of whichever directory moved less often,`);
+  out.push(`  and a pair is printed once it clears ${floor}.`);
   out.push("");
   out.push(`  share  vote per window          pair`);
   for (const p of hist.pairs.slice(0, top)) {
     const prof = p.profile.map((x) => x.toFixed(1).padStart(4)).join(" ");
-    const lo = Math.min(...p.profile), hi = Math.max(...p.profile);
     const conc = p.profile.filter((x) => x > 0).length === 1 ? "  in one window" : "";
     // The repository root has no name of its own, and it is spelled "." on
     // every other row of the page. One population, one spelling — a bare
     // leading space is not a directory a reader can open.
     out.push(`  ${(p.share * 100).toFixed(0).padStart(4)}%  [${prof} ]  of ${p.base}c  ${p.a || "."} + ${p.b || "."}${conc}`);
   }
+  // How many cleared the floor and did not fit --top. Without it the list ends
+  // at a number the reader chose and reads as the end of the evidence.
+  const rest = hist.pairs.length - Math.min(top, hist.pairs.length);
+  if (rest > 0) out.push(`  +${count(rest, "pair")} above that floor, not shown (--top ${top})`);
   out.push("");
   out.push(`  Directories changing together is the Common Closure criterion, a design`);
   out.push(`  argument. No study reviewed for this tool tested whether it predicts`);
@@ -224,9 +296,10 @@ export function renderRelocations(hist) {
   if (!hist.available) return `relocations  not measured — ${hist.reason}`;
   if (!hist.relocations.length) return `relocations  none — no directory has moved 3 or more files, of any type, in this window`;
   const out = [`relocations  what this repository has already moved — every file type, not only source`];
-  for (const r of hist.relocations.slice(0, 8)) {
+  for (const r of hist.relocations.slice(0, RELOCS)) {
     out.push(`  ${day(r.at)}  ${r.n.toString().padStart(4)} files   ${r.from} → ${r.to}`);
   }
+  if (hist.relocations.length > RELOCS) out.push(`  +${count(hist.relocations.length - RELOCS, "move")} not shown`);
   return out.join("\n");
 }
 
@@ -237,8 +310,8 @@ export function renderL2({ files, conv, hist, spans = [], prefix }) {
   if (!inSub.length) return `no source files under ${prefix}`;
   const lineCounts = inSub.map((f) => f.lines);
   const out = [];
-  out.push(`${prefix}   ${inSub.length} files, ${num(lineCounts.reduce((a, b) => a + b, 0))} lines`);
-  out.push(`lines per file   median ${median(lineCounts)}   p90 ${pct(lineCounts, 0.9)}   max ${Math.max(...lineCounts)}`);
+  out.push(`${prefix}   ${count(inSub.length, "file")}, ${count(lineCounts.reduce((a, b) => a + b, 0), "line")}`);
+  out.push(`lines per file   median ${median(lineCounts)}   p90 ${pct(lineCounts, 0.9)}   max ${maxOf(lineCounts)}`);
   // A subtree is read to decide whether it can come out, and that question is
   // not answered by its own files: what holds it in place is who loads on it
   // and what it loads on.
@@ -246,12 +319,12 @@ export function renderL2({ files, conv, hist, spans = [], prefix }) {
   out.push(renderLoad(spans));
   out.push("");
   const sorted = [...inSub].sort((a, b) => b.lines - a.lines);
-  const w = Math.max(...sorted.map((f) => String(f.lines).length));
+  const w = maxOf(sorted.map((f) => String(f.lines).length));
   // A blank cell under a date reads as an old file. A file with no commit in
   // the window is unmeasured, and where history itself is unavailable every
   // cell says so — the same two marks the structure table uses.
   const stamp = (f) => (!hist.available ? "?" : hist.fileLast.has(f.path) ? day(hist.fileLast.get(f.path)) : "-");
-  const sw = Math.max(...sorted.map((f) => stamp(f).length));
+  const sw = maxOf(sorted.map((f) => stamp(f).length));
   // The gutter is measured from the row it heads, so the column name sits over
   // its own column however wide the line counts run.
   const gutter = " ".repeat(Math.max(1, w + 8 - "lines".length));
@@ -301,7 +374,7 @@ function renderLoad(spans) {
 
 const labelOf = (spans, s) => (spans.length > 1 ? ` (${s.eco})` : "");
 
-export function renderDeps(spans) {
+function renderDeps(spans) {
   return spans.map((s) => renderSpan(s, labelOf(spans, s))).join("\n");
 }
 
@@ -313,8 +386,11 @@ function renderSpan(d, label) {
   // A partial resolution is stated on the same line as the number it qualifies.
   // A reader who sees only the count will otherwise read a partial graph as the
   // whole one, which is the failure this tool exists to avoid.
-  out.push(`${head}  ${d.edges} edges over ${d.nodes.size} ${d.nodes.size===1?d.unit:d.unitPlural}, via ${d.provenance}${d.note ? ` — ${d.note}` : ""}`);
-  out.push(`${pad}load path is ${d.depth} layers deep; ${d.tangles.length} mutually entangled group(s)`);
+  out.push(`${head}  ${count(d.edges, "edge")} over ${count(d.nodes.size, d.unit, d.unitPlural)}, via ${d.provenance}${d.note ? ` — ${d.note}` : ""}`);
+  // Once, here. The detail below used to repeat it in other words two lines
+  // later — "0 mutually entangled group(s)" and then "no group found" — and a
+  // fact stated twice invites the reader to look for the difference.
+  out.push(`${pad}load path is ${count(d.depth, "layer")} deep; ${d.tangles.length ? count(d.tangles.length, "mutually entangled group") : "no mutually entangled group"}`);
   // What was measured is the whole module; what is shown is the scope. The
   // edges between the two are the load this subtree carries, and dropping them
   // silently would make a subtree look self-contained when it is not.
@@ -342,7 +418,7 @@ function renderCrossings(c) {
 // Group numbers belong to the page, not to a span: two spans each numbering
 // their own tangles from one would print two g1 rows in a table where a reader
 // cannot tell them apart.
-export function entangledGroups(spans) {
+function entangledGroups(spans) {
   const all = spans.filter((s) => s.measured).flatMap((s) => s.tangles);
   all.sort((a, b) => b.length - a.length);
   const of = new Map();
@@ -356,38 +432,46 @@ export function renderDepsDetail(spans) {
   for (const d of spans) {
     if (!d.measured) continue;
     const label = labelOf(spans, d);
-    const pad = " ".repeat(`dependencies${label}`.length + 2);
     // Each span's detail is announced when there is more than one, so the
     // blocks below cannot be read as one graph's.
     if (label) { out.push(""); out.push(`dependencies${label}`); }
-    d.tangles.slice(0, 3).forEach((t, i) => {
+    d.tangles.slice(0, TANGLES).forEach((t, i) => {
       const internal = t.reduce((s, n) => s + [...(d.out.get(n) || [])].filter((x) => t.includes(x)).length, 0);
       const g = label ? ` g${groups.get(t[0])}` : "";
       // The span's own header already opened the block; a second blank line
       // under it buys nothing, and output is the budget this tool spends.
       if (!(label && i === 0)) out.push("");
-      out.push(`  entangled${g}: ${t.length} ${d.unitPlural}, ${internal} internal edges`);
+      out.push(`  entangled${g}: ${count(t.length, d.unit, d.unitPlural)}, ${count(internal, "internal edge")}`);
       const rank = t.map((n) => ({ n, deg: [...(d.out.get(n) || [])].filter((x) => t.includes(x)).length + t.filter((m) => (d.out.get(m) || new Set()).has(n)).length }))
         .sort((a, b) => b.deg - a.deg);
       for (const r of rank.slice(0, 5)) out.push(`    ${String(r.deg).padStart(3)} of the group's edges   ${r.n}`);
       if (rank.length > 5) out.push(`    +${rank.length - 5} more`);
       out.push(`    Inside a group nothing can be built, tested, or replaced alone.`);
     });
-    if (!d.tangles.length) {
-      // Unlabelled, this line hangs under the header it qualifies; labelled,
-      // it sits with the other blocks of its own span.
-      out.push(`${label ? "  " : pad}no group found in the ${d.nodes.size} ${d.unitPlural} ${d.provenance} resolved`);
-    }
+    if (d.tangles.length > TANGLES) out.push(`  +${count(d.tangles.length - TANGLES, "more group")}`);
 
-    const top = [...d.fanOut.entries()].map(([n, o]) => ({ n, o, i: d.fanIn.get(n) || 0 }))
-      .filter((x) => x.o >= 3 && x.i <= 1).sort((a, b) => b.o - a.o).slice(0, 3);
+    const gate = [...d.fanOut.entries()].map(([n, o]) => ({ n, o, i: d.fanIn.get(n) || 0 }))
+      .filter((x) => x.o >= 3 && x.i <= 1).sort((a, b) => b.o - a.o || (a.n < b.n ? -1 : 1));
+    const top = gate.slice(0, FANOUT);
     if (top.length) {
       out.push("");
       out.push(`  fan-out 3 or more with fan-in 1 or less`);
-      for (const t of top) out.push(`    fan-out ${String(t.o).padStart(3)}  fan-in ${t.i}   ${t.n}`);
+      for (const t of top) {
+        // What a change here arrives at, counted for the reader rather than
+        // left as a traversal of an edge list the page does not print. It
+        // prices the split: everything reached is everything a change reaches.
+        const r = d.reach.get(t.n);
+        const reach = r === undefined ? "" : `  reaches ${r} of ${d.nodes.size}`;
+        out.push(`    fan-out ${String(t.o).padStart(3)}  fan-in ${t.i}${reach}   ${t.n}`);
+      }
+      if (d.reachWhy) out.push(`    reach not measured — ${d.reachWhy}`);
+      if (gate.length > FANOUT) out.push(`    +${gate.length - FANOUT} more past that gate`);
     }
   }
-  return out.join("\n").trim();
+  // Blank lines off both ends, and nothing else: a plain trim also ate the
+  // indent of whichever block happened to come first, so a section moved one
+  // column left depending on what the repository had in it.
+  return out.join("\n").replace(/^\n+/, "").replace(/\s+$/, "");
 }
 
 // ── Compare: this scan against a recorded one ────────────────────────────────
@@ -419,8 +503,8 @@ export function renderCompare(before, now) {
   const at = (s) => (s.at ? ` at ${s.at.slice(0, 7)}` : "");
   out.push(`snapshot    loadpath ${before.version}${at(before)}, --since ${before.since}`);
   out.push(`now         loadpath ${now.version}${at(now)}, --since ${now.since}`);
-  out.push(`            ${num(before.files)} → ${num(now.files)} source files, ` +
-           `${num(Object.keys(before.dirs).length)} → ${num(Object.keys(now.dirs).length)} directories`);
+  out.push(`            ${num(before.files)} → ${count(now.files, "source file")}, ` +
+           `${num(Object.keys(before.dirs).length)} → ${count(Object.keys(now.dirs).length, "directory", "directories")}`);
   const moved = [];
 
   // ── Spans, matched by ecosystem ──
@@ -438,7 +522,7 @@ export function renderCompare(before, now) {
     else if (!n) body.push(`in the snapshot and not measured now; there is nothing to compare it against`);
     else {
       if (b.edges !== n.edges || b.layers !== n.layers) {
-        body.push(`${num(b.edges)} → ${num(n.edges)} edges, ${b.layers} → ${n.layers} layers deep`);
+        body.push(`${num(b.edges)} → ${count(n.edges, "edge")}, ${b.layers} → ${count(n.layers, "layer")} deep`);
       }
       // By member set, never by count: one group dissolving while another of
       // the same size forms is the restructuring, and a count comparison calls

@@ -19,8 +19,12 @@
 
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname, relative, resolve, sep, extname } from "node:path";
+import { join, dirname, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
+// Shared numerics, from the file that owns them. A count meeting a noun is
+// spelled one way across this tool, and a maximum over a growing array is taken
+// one way; a second copy of either here would be a second thing to keep true.
+import { count, maxOf } from "./scan.mjs";
 
 const run = (cmd, args, cwd, ms = 60000, env = {}) => {
   try {
@@ -32,6 +36,20 @@ const run = (cmd, args, cwd, ms = 60000, env = {}) => {
 // `go --version` does not exist; Go spells it `go version`. A probe that gets
 // this wrong reports "no analyzer applies" on a repository that has one.
 const has = (bin, probe = ["--version"]) => run(bin, probe, process.cwd(), 8000).ok;
+
+// Which toolchain answered. "via go list" names the command and not the thing
+// that ran it, and two Go releases do not always resolve one module alike — so
+// a reader checking a figure against their own machine has to be able to see
+// which go produced it. Best effort: a version that cannot be read is left off
+// rather than guessed at, and the provenance is then exactly what it was.
+// Go's own version token repeats its name, so that one is parenthesised at the
+// call site; nothing else needs it.
+const versioned = (name, v) => (v ? `${name} ${v}` : name);
+function goVersion() {
+  const r = run("go", ["version"], process.cwd(), 8000);
+  const v = r.ok ? (r.out.match(/\bgo\d+(?:\.\d+)*\b/)?.[0] ?? "") : "";
+  return v ? `(${v})` : "";
+}
 
 // ── Analyzers ────────────────────────────────────────────────────────────────
 //
@@ -71,8 +89,9 @@ function goAnalyzer(root) {
   // and returning the same null for both said the second about the first. The
   // module count is what the reader loses, so it is what the sentence names.
   if (!has("go", ["version"])) {
-    return { absent: `go is not on PATH, so ${mods.length} Go module${mods.length === 1 ? " was" : "s were"} not analysed` };
+    return { absent: `go is not on PATH, so ${count(mods.length, "Go module")} ${mods.length === 1 ? "was" : "were"} not analysed` };
   }
+  const version = goVersion();
   const edges = new Set(); const nodes = new Set();
   let firstWhy = null, reached = 0;
   for (const dir of mods) {
@@ -84,14 +103,14 @@ function goAnalyzer(root) {
     for (const e of one.edges) edges.add(e);
   }
   if (!nodes.size) {
-    return { provenance: "go list", edges: null,
+    return { provenance: versioned("go list", version), edges: null,
       why: firstWhy ?? "go list resolved no packages in this repository" };
   }
   // `scope` is a path prefix the coverage gate filters on; a module count is
   // not one, and putting it there would empty the gate's denominator and make
   // every multi-module repository pass unchecked.
   const note = reached < mods.length ? `${reached} of ${mods.length} modules resolved` : "";
-  return { provenance: "go list -e -mod=readonly", edges, nodes, unit: "package", unitPlural: "packages", scope: "", note };
+  return { provenance: versioned("go list -e -mod=readonly", version), edges, nodes, unit: "package", unitPlural: "packages", scope: "", note };
 }
 
 // One module, rebased onto `at` — the module's directory relative to the repo.
@@ -177,6 +196,12 @@ function pythonAnalyzer(root) {
   if (!run("python3", ["-c", "import grimp"], root, 15000).ok) {
     return { provenance: "grimp", edges: null, why: "grimp is not installed (pip install grimp)" };
   }
+  // Whatever is installed here, named. grimp is the one analyzer this tool
+  // neither ships nor pins, so its version is a property of the machine and the
+  // only honest way to carry it is to ask. A version that will not read is left
+  // off; the alternative is a provenance that claims more than was checked.
+  const gv = run("python3", ["-c", "import grimp;print(grimp.__version__)"], root, 15000);
+  const prov = versioned("grimp", gv.ok ? gv.out.trim().split("\n").pop() : "");
   // src-layout is the modern packaging standard; looking only at the repository
   // root finds the tests package or nothing at all.
   const roots = ["", "src"].filter((d) => existsSync(join(root, d || ".")));
@@ -188,7 +213,7 @@ function pythonAnalyzer(root) {
       .map((e) => e.name);
     if (here.length) { base = d; pkgs = here; break; }
   }
-  if (!pkgs.length) return { provenance: "grimp", edges: null, why: "no importable package found at the root or under src/" };
+  if (!pkgs.length) return { provenance: prov, edges: null, why: "no importable package found at the root or under src/" };
   const script = `
 import json, grimp
 out=[]
@@ -200,9 +225,9 @@ for pkg in ${JSON.stringify(pkgs)}:
             out.append([m, d])
 print(json.dumps({"edges": out}))`;
   const r = run("python3", ["-c", script], join(root, base), 120000);
-  if (!r.ok) return { provenance: "grimp", edges: null, why: r.err };
-  let j; try { j = JSON.parse(r.out.trim().split("\n").pop()); } catch { return { provenance: "grimp", edges: null, why: "unparseable grimp output" }; }
-  if (j.error) return { provenance: "grimp", edges: null, why: j.error.slice(0, 160) };
+  if (!r.ok) return { provenance: prov, edges: null, why: r.err };
+  let j; try { j = JSON.parse(r.out.trim().split("\n").pop()); } catch { return { provenance: prov, edges: null, why: "unparseable grimp output" }; }
+  if (j.error) return { provenance: prov, edges: null, why: j.error.slice(0, 160) };
   const edges = new Set(); const nodes = new Set();
   const toDir = (m) => m.split(".").slice(0, -1).join("/") || m.split(".")[0];
   for (const [a, b] of j.edges) {
@@ -210,11 +235,25 @@ print(json.dumps({"edges": out}))`;
     nodes.add(x); nodes.add(y);
     if (x !== y) edges.add(x + "\0" + y);
   }
-  return { provenance: "grimp", edges, nodes, unit: "module directory", unitPlural: "module directories", scope: base };
+  return { provenance: prov, edges, nodes, unit: "module directory", unitPlural: "module directories", scope: base };
 }
 
 // madge returns {} without --extensions and misses aliases without --ts-config,
 // with no error either way. Both flags, then the sanity assertion.
+//
+// Pinned, and the pin is the provenance. `npx madge` resolves to whatever the
+// cache happens to hold, which makes the graph a fact about the machine rather
+// than about the repository, and two machines then disagree about a number
+// neither of them can trace. A probe would name what was installed rather than
+// what ran, so the constant is asked instead: it is the version npx was told to
+// fetch, and there is nothing else it could have run.
+const MADGE_VERSION = "8.0.0";
+// Exported because two other places fetch the same analyzer — the corpus warm
+// step and the suite's own probe — and three spellings of one pin is three
+// versions waiting to differ.
+export const MADGE = `madge@${MADGE_VERSION}`;
+const MADGE_PROVENANCE = `madge ${MADGE_VERSION}`;
+
 function nodeAnalyzer(root) {
   if (!existsSync(join(root, "package.json"))) return null;
   const srcDir = ["src", "lib", "packages", "app"].find((d) => existsSync(join(root, d)));
@@ -224,7 +263,7 @@ function nodeAnalyzer(root) {
   // declaration — whether a package.json declares a module is the manifest
   // scan's judgement, and it is made elsewhere.
   if (!srcDir) return { absent: "a package.json sits here with none of src/, lib/, packages/ or app/ beside it for madge to read" };
-  const args = ["--yes", "--offline", "madge", "--json", "--extensions", "ts,tsx,js,jsx,mjs"];
+  const args = ["--yes", "--offline", MADGE, "--json", "--extensions", "ts,tsx,js,jsx,mjs"];
   if (existsSync(join(root, "tsconfig.json"))) args.push("--ts-config", "./tsconfig.json");
   args.push(srcDir);
   // madge exits without draining its stdout pipe, so anything past 64 KiB is
@@ -235,17 +274,17 @@ function nodeAnalyzer(root) {
   let raw = "";
   try { raw = readFileSync(tmp, "utf8"); } catch { /* nothing was written */ }
   finally { try { rmSync(tmp, { force: true }); } catch {} }
-  if (!raw.trim()) return { provenance: "madge", edges: null, why: r.ok ? "madge wrote no output" : r.err };
-  let j; try { j = JSON.parse(raw); } catch { return { provenance: "madge", edges: null, why: `madge output did not parse (${raw.length} bytes)` }; }
+  if (!raw.trim()) return { provenance: MADGE_PROVENANCE, edges: null, why: r.ok ? "madge wrote no output" : r.err };
+  let j; try { j = JSON.parse(raw); } catch { return { provenance: MADGE_PROVENANCE, edges: null, why: `madge output did not parse (${raw.length} bytes)` }; }
   const keys = Object.keys(j);
-  if (!keys.length) return { provenance: "madge", edges: null, why: "madge returned an empty graph; treat as not measured, not as no dependencies" };
+  if (!keys.length) return { provenance: MADGE_PROVENANCE, edges: null, why: "madge returned an empty graph; treat as not measured, not as no dependencies" };
   const edges = new Set(); const nodes = new Set();
   const toDir = (p) => { const d = dirname(join(srcDir, p)); return d === "." ? srcDir : d; };
   for (const [from, tos] of Object.entries(j)) {
     const a = toDir(from); nodes.add(a);
     for (const t of tos) { const b = toDir(t); nodes.add(b); if (a !== b) edges.add(a + "\0" + b); }
   }
-  return { provenance: "madge", edges, nodes, unit: "file directory", unitPlural: "file directories", scope: srcDir };
+  return { provenance: MADGE_PROVENANCE, edges, nodes, unit: "file directory", unitPlural: "file directories", scope: srcDir };
 }
 
 // ── Ecosystem families ───────────────────────────────────────────────────────
@@ -340,9 +379,12 @@ export function tarjan(nodes, out) {
   return comps;
 }
 
-// Steward's DSM partitioning is exactly condensation plus a topological order;
-// the blocks that cannot be triangularised are the non-trivial components.
-export function layers(comps, out) {
+// The graph with every entangled group collapsed to one node. Built once and
+// read twice: layer depth is how far weight travels before it reaches something
+// that depends on nothing, and transitive reach is how much weight one node
+// carries. Both are traversals of this same DAG, and building it twice would be
+// two chances for the two figures to disagree about one graph.
+function condense(comps, out) {
   const of = new Map();
   comps.forEach((c, i) => c.forEach((n) => of.set(n, i)));
   const cOut = comps.map(() => new Set()), indeg = comps.map(() => 0);
@@ -354,17 +396,83 @@ export function layers(comps, out) {
       cOut[ca].add(cb); indeg[cb]++;
     }
   }
+  return { of, cOut, indeg };
+}
+
+// Steward's DSM partitioning is exactly condensation plus a topological order;
+// the blocks that cannot be triangularised are the non-trivial components.
+// The order the sweep visits them in is kept, because reach needs the reverse
+// of it and recomputing a topological order is recomputing this function.
+function layers(comps, out) {
+  const { of, cOut, indeg } = condense(comps, out);
   const level = comps.map(() => 0);
   const queue = comps.map((_, i) => i).filter((i) => indeg[i] === 0);
   const deg = [...indeg];
+  const order = [];
   while (queue.length) {
     const i = queue.shift();
+    order.push(i);
     for (const j of cOut[i]) {
       level[j] = Math.max(level[j], level[i] + 1);
       if (--deg[j] === 0) queue.push(j);
     }
   }
-  return { level, of };
+  return { level, of, cOut, order };
+}
+
+// How many nodes each node's load path can arrive at. DESIGN.md asks for it by
+// name: an edge list makes the agent compute reach itself, which is the
+// multi-hop traversal a model is least reliable at, while a program is exact
+// at it. "This directory is reachable from 80 others" is the fact that prices a
+// split; the edges that imply it are not.
+//
+// Taken over the condensation, because every member of an entangled group
+// reaches exactly what the group reaches — a 27-directory tangle costs one
+// traversal, not 27. And by union rather than by sum: two paths into one
+// component would otherwise count it twice, so each component carries one bit
+// per component and a parent takes the bitwise OR of its children. Reverse
+// topological order means every child is finished before its parent asks, which
+// is what keeps this one pass and not a recursion a deep load path overflows.
+//
+// The closure costs one bit per component per component. Past the ceiling that
+// allocation is worth more than the answer, so no node carries a reach and the
+// renderer says so rather than printing a number nothing computed.
+const REACH_CEILING = 20000;
+
+function reaches(comps, { cOut, order }) {
+  const C = comps.length;
+  if (C > REACH_CEILING) {
+    return { reach: new Map(), why: `${C} components is past the ${REACH_CEILING} this closure is computed under` };
+  }
+  const W = (C + 31) >> 5;
+  const bits = new Uint32Array(C * W);
+  for (let k = order.length - 1; k >= 0; k--) {
+    const i = order[k], base = i * W;
+    for (const j of cOut[i]) {
+      bits[base + (j >> 5)] |= 1 << (j & 31);
+      const from = j * W;
+      for (let w = 0; w < W; w++) bits[base + w] |= bits[from + w];
+    }
+  }
+  const reach = new Map();
+  for (let i = 0; i < C; i++) {
+    // Its own group's other members are reachable from it, and from each of
+    // them: that is what being in one group means.
+    let n = comps[i].length - 1;
+    const base = i * W;
+    for (let w = 0; w < W; w++) {
+      // Lowest set bit, cleared each time, so the walk costs what was reached
+      // rather than one step per component in the repository.
+      let word = bits[base + w];
+      while (word !== 0) {
+        const lsb = word & -word;
+        n += comps[(w << 5) + (31 - Math.clz32(lsb))].length;
+        word ^= lsb;
+      }
+    }
+    for (const node of comps[i]) reach.set(node, n);
+  }
+  return { reach, why: "" };
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────
@@ -406,7 +514,7 @@ const busiest = (m) => {
 // `within` is the load the subtree carries alone; `inbound` and `outbound` are
 // what crosses its line, counted per counterpart directory so the reader can
 // follow the busiest one rather than an edge list.
-export function confine(nodes, edges, at) {
+function confine(nodes, edges, at) {
   const inside = (n) => !at || n === at || n.startsWith(at + "/");
   const kept = new Set([...nodes].filter(inside));
   const within = new Set(); const inbound = new Map(); const outbound = new Map();
@@ -434,7 +542,7 @@ function span(root, fam, { files, prefix, subtree }) {
   // so the reader gets a sentence rather than a missing line.
   const n = fam.paths.length;
   if (!r) return n
-    ? notMeasured(fam.eco, `${n} ${fam.eco} manifest${n === 1 ? " declares" : "s declare"} this ecosystem and no project was found at ${at ? at + "/" : "the repository root"}`)
+    ? notMeasured(fam.eco, `${count(n, `${fam.eco} manifest`)} ${n === 1 ? "declares" : "declare"} this ecosystem and no project was found at ${at ? at + "/" : "the repository root"}`)
     : null;
   if (r.absent) return notMeasured(fam.eco, r.absent);
   if (!r.edges) return notMeasured(fam.eco, `${r.provenance} could not run — ${r.why}`);
@@ -455,13 +563,13 @@ function span(root, fam, { files, prefix, subtree }) {
   const inScope = files.filter((f) => !scope || f.dir === scope || f.dir.startsWith(scope + "/"));
   const dirCount = new Set(inScope.map((f) => f.dir)).size;
   const where = scope ? `${scope}/` : "the tree";
-  if (r.edges.size === 0) return notMeasured(fam.eco, `${r.provenance} resolved no edges over ${dirCount} directories in ${where}; treat as not measured, not as no dependencies`);
+  if (r.edges.size === 0) return notMeasured(fam.eco, `${r.provenance} resolved no edges over ${count(dirCount, "directory", "directories")} in ${where}; treat as not measured, not as no dependencies`);
   // Proportional, not a constant. A graph covering a twentieth of the tree
   // is not a small graph, it is a failed one — and a fixed floor of three
   // let exactly that through while the message implied otherwise.
   const covered = r.nodes.size / Math.max(dirCount, 1);
   if (r.nodes.size < 2 || covered < 0.2) {
-    return notMeasured(fam.eco, `${r.provenance} resolved ${r.nodes.size} nodes over ${dirCount} source directories in ${where} (${Math.round(covered * 100)}%); too little of it to read as a dependency graph`);
+    return notMeasured(fam.eco, `${r.provenance} resolved ${count(r.nodes.size, "node")} over ${count(dirCount, "source directory", "source directories")} in ${where} (${Math.round(covered * 100)}%); too little of it to read as a dependency graph`);
   }
 
   // The gate above judged the analyzer on what it was pointed at; this judges
@@ -488,8 +596,10 @@ function span(root, fam, { files, prefix, subtree }) {
   for (const e of within) { const [a2, b] = e.split("\0"); if (!out.has(a2)) out.set(a2, new Set()); out.get(a2).add(b); }
   const comps = tarjan([...kept], out);
   const tangles = comps.filter((c) => c.length > 1).sort((a, b) => b.length - a.length);
-  const { level } = layers(comps, out);
-  const depth = Math.max(0, ...level) + 1;
+  const layered = layers(comps, out);
+  const level = layered.level;
+  const depth = maxOf(level) + 1;
+  const { reach, why: reachWhy } = reaches(comps, layered);
 
   const fanIn = new Map(), fanOut = new Map();
   for (const [a2, tos] of out) { fanOut.set(a2, tos.size); for (const b of tos) fanIn.set(b, (fanIn.get(b) || 0) + 1); }
@@ -503,8 +613,8 @@ function span(root, fam, { files, prefix, subtree }) {
   }));
 
   return { eco: fam.eco, measured: true, provenance: r.provenance, unit: r.unit, unitPlural,
-           note: r.note || "", scope, out, nodes: kept, edges: within.size, comps, tangles, level, depth, fanIn, fanOut, layerOf, groupOf,
-           crossings: prefix ? crossings : null, load };
+           note: r.note || "", scope, out, nodes: kept, edges: within.size, tangles, depth, fanIn, fanOut, layerOf, groupOf,
+           reach, reachWhy, crossings: prefix ? crossings : null, load };
 }
 
 // A reason is data, exactly as History's `unavailable` is. Composing the

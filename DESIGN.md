@@ -127,7 +127,7 @@ The division of labour follows: **the tool traverses, the agent judges.** Traver
 
 ### The shape that survives serialisation
 
-A sorted table of self-contained rows, each directory a feature vector — files, lines, tests, commits, commit share, last touched, layer and group. Transitive reach and a normalised cumulative dependency figure belong here and are not built; both are one pass over a graph the tool already holds.
+A sorted table of self-contained rows, each directory a feature vector — files, lines, tests, commits, commit share, last touched, layer and group. Transitive reach is built, and it is reported beside the high fan-out nodes that already earned a line rather than as a column of its own: on a table the budget trims, a column is paid for by every row and read on a handful. A normalised cumulative dependency figure is still not built; it is one pass over a graph the tool already holds.
 
 - **No cross-line joins.** Each row is readable alone, because the norms are stated once at the top.
 - **Order carries meaning.** Rows are ranked by mass, and each carries its ratio against the norms stated above them, so the agent does not have to sort — something it can do but not reliably across many rows.

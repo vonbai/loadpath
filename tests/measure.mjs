@@ -14,6 +14,9 @@ import { join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { tokens } from "../skills/loadpath/scripts/scan.mjs";
+// The same pin the scan fetches. Warming a different version of the analyzer
+// than the one that runs is a warm cache that does not warm anything.
+import { MADGE } from "../skills/loadpath/scripts/deps.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = join(ROOT, "skills", "loadpath", "scripts", "loadpath.mjs");
@@ -94,7 +97,7 @@ for (const c of CORPUS) {
     // analyzer needs is fetched here, named, and paid for once.
     try {
       if (c.eco === "Go") sh("go", ["mod", "download"], dir);
-      else if (c.eco === "Node") sh("npx", ["--yes", "madge", "--version"], dir);
+      else if (c.eco === "Node") sh("npx", ["--yes", MADGE, "--version"], dir);
       console.log(`  warmed  ${c.name} (${c.eco})`);
     } catch (e) {
       console.log(`  FAIL  ${c.name} could not be warmed — ${String(e.message).split("\n")[0].slice(0, 120)}`);
@@ -109,15 +112,21 @@ for (const c of CORPUS) {
   // Both views, because both are published figures.
   const orient = sh("node", [CLI, dir, "--since", "20.years"], ROOT);
 
-  const grab = (re) => Number(out.match(re)?.[1] ?? -1);
+  // Every noun here takes a singular when its count is one, so every pattern
+  // that reads one has to admit both spellings. "no mutually entangled group"
+  // is the measured zero: the line stopped printing a digit for it, and a
+  // pattern that only reads digits would have called that a missing figure.
+  // Thousands separators too: the edge count carries them now, as every other
+  // large number on the page always has, and `Number("1,710")` is NaN.
+  const grab = (re) => Number((out.match(re)?.[1] ?? "-1").replace(/,/g, ""));
   const r = {
     corpus: c.name,
     sha: c.sha.slice(0, 12),
-    files: Number((out.match(/^([\d,]+) source files/m)?.[1] ?? "-1").replace(/,/g, "")),
-    directories: grab(/, (\d+) directories,/),
-    edges: grab(/dependencies\s+([\d,]+) edges/),
-    entangled: grab(/(\d+) mutually entangled group/),
-    layers: grab(/load path is (\d+) layers deep/),
+    files: grab(/^([\d,]+) source files?,/m),
+    directories: grab(/, (\d+) director(?:y|ies),/),
+    edges: grab(/dependencies\s+([\d,]+) edges?\b/),
+    entangled: /no mutually entangled group/.test(out) ? 0 : grab(/(\d+) mutually entangled group/),
+    layers: grab(/load path is (\d+) layers? deep/),
     analyzer: out.match(/via ([^\n]+)/)?.[1] ?? "none",
     tokens: tokens(out),
     orientTokens: tokens(orient),
@@ -149,6 +158,10 @@ if (!results.length) { console.log("\nno corpus reachable; nothing was measured,
 if (failedFetch) process.exit(1);
 // Compare against the recorded baseline, so a figure cannot move unnoticed.
 const BASE = join(ROOT, "tests", "measure-baseline.json");
+// The analyzer's identity, without the toolchain version the provenance now
+// carries: "go list -e -mod=readonly (go1.26.4)" and "madge 8.0.0" are the
+// same two analyzers on any machine that has them.
+const analyzerId = (s) => String(s).replace(/\s+\(?(?:go)?v?\d+(?:\.\d+)*\)?$/, "");
 const record = process.argv.includes("--record");
 const seen = Object.fromEntries(results.map((r) => [r.corpus, {
   sha: r.sha, files: r.files, directories: r.directories, edges: r.edges,
@@ -173,6 +186,18 @@ if (record) {
       for (const k of ["edges", "entangled", "layers", "analyzer", "orientTokens", "structureTokens"]) delete want[k];
     }
     for (const [k, v] of Object.entries(want)) {
+      // Which analyzer ran must not move; which release of it this machine
+      // happens to have is a fact about the machine. Pinning the version here
+      // would fail the run on somebody else's Go upgrade rather than on a
+      // regression, so the identity is held and the version is reported.
+      if (k === "analyzer") {
+        if (analyzerId(got[k]) !== analyzerId(v)) {
+          console.log(`  FAIL  ${corpus}.analyzer: measured ${got[k]}, baseline ${v}`); failed = true;
+        } else if (got[k] !== v) {
+          console.log(`  NOTE  ${corpus}.analyzer: recorded as "${v}", measured "${got[k]}" — the toolchain moved, the analyzer did not`);
+        }
+        continue;
+      }
       // Token counts carry the current date, and a date one character wider
       // moves them by a few. A band, stated, catches a divisor error without
       // failing on the calendar.

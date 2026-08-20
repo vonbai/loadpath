@@ -187,5 +187,26 @@ for (const m of new Set([...text.matchAll(/`(--[a-z]+)[^`]*`/g)].map((x) => x[1]
   if (!cli.includes(`"${m}"`)) errors.push(`SKILL.md teaches ${m}, which the CLI does not accept`);
 }
 
+// 8. And the other direction: every flag the CLI accepts must appear in
+// --help. A flag that exists and is undocumented is a flag nobody finds, and
+// the only map of this tool a reader has is the one it prints itself. The
+// header comment used to carry a second copy of the list; it was deleted, and
+// this is what keeps the remaining copy complete.
+{
+  const parse = /function parse\(argv\) \{[\s\S]*?\n\}/.exec(cli)?.[0];
+  const help = /const HELP = `([\s\S]*?)`;/.exec(cli)?.[1];
+  if (!parse) errors.push("loadpath.mjs declares no parse(argv); the flag list cannot be read");
+  else if (help === undefined) errors.push("loadpath.mjs declares no HELP; the flags it accepts are documented nowhere");
+  else {
+    // A flag token, not a substring: "-h" occurs inside "--help", and a
+    // containment test would call an undocumented -h documented.
+    const flags = (s) => new Set([...s.matchAll(/(?<![\w-])(--?[A-Za-z][\w-]*)/g)].map((m) => m[1]));
+    const named = flags(help);
+    for (const f of [...parse.matchAll(/"(--?[A-Za-z][\w-]*)"/g)].map((m) => m[1])) {
+      if (!named.has(f)) errors.push(`loadpath.mjs accepts ${f} and --help does not name it`);
+    }
+  }
+}
+
 if (errors.length) { console.log("FAIL"); errors.forEach((e) => console.log(`  - ${e}`)); process.exit(1); }
 console.log(`   documents consistent: ${mds.length} markdown files, pointers resolve, no withdrawn terminology, ADRs match the code`);

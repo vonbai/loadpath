@@ -1,19 +1,11 @@
 #!/usr/bin/env node
-// Loadpath — one command, three layers.
+// Loadpath — one command, three layers. The default output orients; everything
+// else is asked for by name.
 //
-//   node loadpath.mjs [REPO] [options]
-//
-//   --since 12.months     history window (default 12.months)
-//   --budget 1600         token budget for the structure table (default 1600)
-//   --windows 4           time windows for co-change (default 4)
-//   --cap 30              breadth cap; wider commits are sweeps, not coupling
-//   --top 12              co-change pairs to print
-//   --dir PATH            file-level detail for one subtree, then stop
-//   --structure           add the structure table and the entangled groups
-//   --snapshot FILE       also record this scan's layout and spans to FILE
-//   --compare FILE        print only what moved since FILE, then stop
-//
-// The default output orients. Ask for more by name.
+// The flags and what each one does live in HELP below, once. This header
+// carried a second copy of that list, which is a list with two sides to go
+// stale on; tests/contract.mjs now holds HELP to naming every flag parse()
+// accepts, so HELP is the only place either can be read from.
 
 import { existsSync, statSync, realpathSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, relative, sep } from "node:path";
@@ -28,22 +20,66 @@ import { dependencies } from "./deps.mjs";
 // provenance. tests/contract.mjs holds it equal to package.json.
 const VERSION = "0.2.2";
 
+// What the command line said, and what this tool did with it. Every departure
+// between the two is carried out of here rather than made quietly: a flag it
+// does not know, a flag whose value is missing, a value it had to move, and a
+// flag another flag makes it ignore. The reader typed a number and was shown
+// the output of a different one, with nothing on the page to say so.
 function parse(argv) {
-  const o = { repo: ".", since: "12.months", budget: 1600, windows: 4, cap: 30, top: 12, dir: null, structure: false, snapshot: null, compare: null };
-  const rest = [];
+  const o = { repo: ".", since: "12.months", budget: 1600, windows: 4, cap: 30, top: 12, dir: null, structure: false, snapshot: null, compare: null, notices: [], error: null };
+  const rest = [], asked = new Set();
+  // The first refusal wins. A second message about the same command line tells
+  // the reader to fix two things when fixing the first may resolve both.
+  const fail = (why) => { if (!o.error) o.error = why; };
+  // A flag that needs a value and did not get one. The next token missing, or
+  // itself a flag, is the shape the typo takes — and falling back to the
+  // default there answers a question nobody asked, silently. --snapshot has
+  // always refused; this is that rule, generalised to every flag that takes a
+  // value rather than left as one flag's special case.
+  const value = (flag, i, numeric = false) => {
+    const v = argv[i + 1];
+    // A negative number is a value, and one of the bounds below is where it
+    // gets answered — reading it as the next flag would refuse it for the
+    // wrong reason and name the wrong fix.
+    const looksLikeFlag = v !== undefined && v.startsWith("-") && !(numeric && Number.isFinite(Number(v)));
+    if (v === undefined || looksLikeFlag) { fail(`${flag} needs a value, and none followed it`); return null; }
+    return v;
+  };
+  // A clamp the reader can see. `Number(x) || default` read every non-number as
+  // a request for the default, so `--budget wide` and `--budget 1600` produced
+  // the same page; and a value outside the bounds was moved without a word.
+  const bounded = (flag, raw, lo, hi) => {
+    const n = Number(raw);
+    if (raw.trim() === "" || !Number.isFinite(n)) { fail(`${flag} ${raw} is not a number`); return null; }
+    let used = Math.trunc(n);
+    if (used !== n) o.notices.push(`${flag} ${raw} is not a whole number; using ${used}`);
+    if (used < lo) { o.notices.push(`${flag} ${raw} is below the floor of ${lo}; using ${lo}`); used = lo; }
+    else if (used > hi) { o.notices.push(`${flag} ${raw} is above the ceiling of ${hi}; using ${hi}`); used = hi; }
+    return used;
+  };
+  const take = (flag, i, lo, hi, set) => {
+    const raw = value(flag, i, true);
+    if (raw === null) return;
+    const n = bounded(flag, raw, lo, hi);
+    if (n !== null) set(n);
+  };
+
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--since") o.since = argv[++i];
-    else if (a === "--budget") o.budget = Math.max(200, Number(argv[++i]) || 1600);
-    else if (a === "--windows") o.windows = Math.min(12, Math.max(2, Number(argv[++i]) || 4));
-    else if (a === "--cap") o.cap = Math.max(2, Number(argv[++i]) || 30);
-    else if (a === "--top") o.top = Math.max(1, Number(argv[++i]) || 12);
-    else if (a === "--dir") o.dir = argv[++i];
+    if (a.startsWith("-")) asked.add(a);
+    if (a === "--since") { const v = value(a, i); if (v !== null) o.since = v; i++; }
+    else if (a === "--budget") { take(a, i, 200, Infinity, (n) => (o.budget = n)); i++; }
+    else if (a === "--windows") { take(a, i, 2, 12, (n) => (o.windows = n)); i++; }
+    else if (a === "--cap") { take(a, i, 2, Infinity, (n) => (o.cap = n)); i++; }
+    else if (a === "--top") { take(a, i, 1, Infinity, (n) => (o.top = n)); i++; }
+    else if (a === "--dir") { const v = value(a, i); if (v !== null) o.dir = v; i++; }
     else if (a === "--structure") o.structure = true;
     // A file the user named, and only that: there is no default path here,
     // because the only default worth having would be inside the repository
-    // being read, and a read does not write there. An empty string is the
-    // flag arriving without its file, which main() refuses by name.
+    // being read, and a read does not write there. An empty string is the flag
+    // arriving without its file, which main() refuses by name and with that
+    // reason — a fuller sentence than the general one above, and the reason is
+    // the part worth reading.
     else if (a === "--snapshot" || a === "--compare") {
       const v = argv[i + 1];
       const given = v !== undefined && !v.startsWith("-");
@@ -52,9 +88,20 @@ function parse(argv) {
     }
     else if (a === "--version" || a === "-V") { o.version = true; }
     else if (a === "-h" || a === "--help") { o.help = true; }
-    else if (!a.startsWith("-")) rest.push(a);
+    else if (a.startsWith("-")) fail(`${a} is not a flag this tool accepts; --help lists the ones it does`);
+    else rest.push(a);
   }
+  // One repository, because everything below is measured against one tree. A
+  // second path was taken as the first and the rest dropped without a word,
+  // which reads as a scan of something it never opened.
+  if (rest.length > 1) fail(`${rest.length} repositories were given (${rest.join(", ")}); this reads one`);
   if (rest.length) o.repo = rest[0];
+  // --dir answers a different question and stops, so these three never reach
+  // the page. They were accepted and dropped in silence.
+  if (o.dir) {
+    const ignored = ["--structure", "--budget", "--top"].filter((f) => asked.has(f));
+    if (ignored.length) o.notices.push(`--dir prints one subtree and stops, so ${ignored.join(", ")} ${ignored.length === 1 ? "has" : "have"} no effect here`);
+  }
   return o;
 }
 
@@ -62,7 +109,8 @@ const HELP = `loadpath — exact facts about how a codebase carries its weight
 
   node loadpath.mjs [REPO] [options]
 
-  --version           print the version of this installed copy
+  -h, --help          print this
+  -V, --version       print the version of this installed copy
   --since 12.months   history window
   --budget 1600       token budget for the structure table
   --windows 4         time windows for co-change
@@ -113,10 +161,17 @@ function readSnapshot(file) {
 
 function main() {
   const o = parse(process.argv.slice(2));
+  // A command line this tool did not understand is answered before anything is
+  // measured. Running anyway would produce a page that looks like an answer to
+  // what was typed and is an answer to something else.
+  if (o.error) refuse(o.error);
   if (o.version) { console.log(`loadpath ${VERSION}`); return; }
   if (o.help) { console.log(HELP); return; }
   if (o.snapshot === "") refuse("--snapshot needs the file to write, and has no default: the only default worth having would sit inside the repository being read, and a read does not write there");
   if (o.compare === "") refuse("--compare needs the snapshot file to read, and has no default");
+  // Where the reader's number and this tool's number differ, on stderr, so it
+  // travels with the run and not with the measurements.
+  for (const n of o.notices) console.error(`loadpath: ${n}`);
 
   let root = resolve(o.repo);
   if (!existsSync(root) || !statSync(root).isDirectory()) {
@@ -165,9 +220,11 @@ function main() {
   const inScope = (m) => under(m.path, prefix) || under(prefix, m.path);
   const declared = manifests(root);
   const mans = declared.modules.filter(inScope);
-  // What the scan dropped as copies, scoped the same way: a drop outside the
-  // scope is not this reader's news.
+  // What the scan dropped, scoped the same way: a drop outside the scope is not
+  // this reader's news. Copies of one name on one side, and the manifests the
+  // shape and path rules refused on the other.
   const filtered = declared.filtered.filter(inScope);
+  const noise = declared.noise.filter(inScope);
 
   // Where each analyzer is rooted is the quarantine's decision, not this
   // file's: one root for the whole repository is what made a Go backend beside
@@ -195,7 +252,7 @@ function main() {
     if (scopeNote) parts.push(scopeNote);
     parts.push("");
     // The whole result, not a pre-rendered line: the entry point does not format.
-    parts.push(renderL0({ files, dirs, conv, hist, mans, filtered, spans, scattered: scatter(files), root, since: o.since, windows: o.windows }));
+    parts.push(renderL0({ files, dirs, conv, hist, mans, filtered, noise, spans, scattered: scatter(files), since: o.since }));
 
     const reloc = renderRelocations(hist);
     if (reloc) { parts.push(""); parts.push(reloc); }
@@ -205,7 +262,9 @@ function main() {
 
     if (o.structure) {
       parts.push("");
-      parts.push("structure   every directory, largest first");
+      // The section's own header comes back with it: whether the budget trimmed
+      // the table is the renderer's fact, and the promise printed here was made
+      // by a file that could not know whether it was kept.
       parts.push(renderL1({ dirs, hist, spans, budget: o.budget }));
       // Each span's header line already appeared in L0; only the detail is new.
       const detail = renderDepsDetail(spans);
@@ -230,4 +289,3 @@ function main() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) main();
-export { parse };

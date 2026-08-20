@@ -10,8 +10,8 @@
 // The tool emits leads. A finding exists after someone reads the code a lead
 // points at. See DESIGN.md.
 
-import { readdirSync, openSync, readSync, closeSync, existsSync, statSync } from "node:fs";
-import { join, relative, dirname, basename, extname, sep, resolve } from "node:path";
+import { readdirSync, openSync, readSync, closeSync, existsSync } from "node:fs";
+import { join, relative, dirname, basename, extname, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 
 // ── Vocabulary ───────────────────────────────────────────────────────────────
@@ -119,6 +119,17 @@ const pct = (xs, p) => {
 };
 const day = (t) => new Date(t * 1000).toISOString().slice(0, 10);
 const num = (n) => n.toLocaleString("en-US");
+// One count, one noun, one spelling of the pair. "1 directories" is a defect
+// the reader corrects silently on every line that carries it, and correcting it
+// once here is cheaper than reading past it a hundred times. The plural is the
+// singular plus an s unless a caller says otherwise, because most of them are.
+const count = (n, one, many = one + "s") => `${num(n)} ${n === 1 ? one : many}`;
+// Math.max over a spread is an argument list, and an argument list has a
+// ceiling: past roughly 120,000 elements it throws RangeError instead of
+// returning the maximum. Every array reached this way grows with the
+// repository, so the loop is not a micro-optimisation but the only form that
+// cannot fail on a large one.
+const maxOf = (xs, seed = 0) => { let m = seed; for (const x of xs) if (x > m) m = x; return m; };
 // Token estimate. A proxy, stated as one wherever it is printed.
 // Upper bounds, not estimates — a budget that can be exceeded is not a budget.
 // Measured with tiktoken (o200k_base and cl100k_base agree to within 1%) over
@@ -165,7 +176,7 @@ function submodulePaths(root) {
 function inventory(root, prefix = "", submodules = new Set()) {
   const admit = admits(submodules);
   const files = [];
-  const unreadable = [];
+  const unreadable = [], binary = [];
   const walk = (abs) => {
     let entries;
     try { entries = readdirSync(abs, { withFileTypes: true }); }
@@ -182,34 +193,51 @@ function inventory(root, prefix = "", submodules = new Set()) {
       if (prefix && !rel.startsWith(prefix + "/") && rel !== prefix) continue;
       if (!admit(rel)) continue;
       const m = measure(p);
-      if (m.unreadable) { unreadable.push(rel); continue; }
+      if (m.unreadable) { (m.binary ? binary : unreadable).push(rel); continue; }
       if (m.generated) continue;
       files.push({ path: rel, dir: dirname(rel) === "." ? "" : dirname(rel), ...m });
     }
   };
   walk(root);
+  // What the walk refused for a reason the reader cannot see from the tree.
+  // Both are counts of files that exist and are not in any figure below, which
+  // is a fact about the measurement and belongs beside it.
   files.unreadable = unreadable;
+  files.binary = binary;
   return files;
 }
 
-// One read per file: line count, byte count, generated-marker check, binary check.
+// One read per file: line count, generated-marker check, binary check.
+//
+// git calls a file binary when a NUL byte appears in its first 8000 bytes.
+// That convention is borrowed rather than invented, and it is what separates a
+// line count from a newline count: compiled output holds newline bytes, and
+// counting them produced a "line count" for a file that has no lines. It
+// entered the total, the median and the p90 looking like every other number.
+const BINARY_SNIFF = 8000;
 const BUF = Buffer.allocUnsafe(1 << 16);
 function measure(abs) {
   let fd;
   // A file that cannot be read is not a file of zero lines. It leaves the
   // inventory rather than entering every total, median and percentile as 0.
   try { fd = openSync(abs, "r"); } catch { return { unreadable: true }; }
-  let lines = 0, bytes = 0, first = "", partial = false, n;
+  let lines = 0, bytes = 0, first = "", partial = false, binary = false, n;
   try {
     while ((n = readSync(fd, BUF, 0, BUF.length, null)) > 0) {
-      if (bytes === 0) first = BUF.subarray(0, Math.min(n, 400)).toString("utf8");
+      if (bytes === 0) {
+        first = BUF.subarray(0, Math.min(n, 400)).toString("utf8");
+        binary = BUF.subarray(0, Math.min(n, BINARY_SNIFF)).includes(0);
+      }
       for (let i = 0; i < n; i++) if (BUF[i] === 10) lines++;
       bytes += n;
     }
   } catch { partial = true; }
   finally { closeSync(fd); }
   if (partial) return { unreadable: true };   // a partial count is not an exact one
-  return { lines, bytes, generated: GENERATED_HEAD.test(first) };
+  // The same exit an unreadable file takes, for the same reason: a number that
+  // would be fabricated is worse than a file that says it was not measured.
+  if (binary) return { unreadable: true, binary: true };
+  return { lines, generated: GENERATED_HEAD.test(first) };
 }
 
 // Which test convention does this repository use? Voted, not assumed.
@@ -367,24 +395,31 @@ function history(root, { since: requested, windows, breadthCap, prefix = "", sub
   const commits = [];
   const relocations = new Map();
   let cur = null;
+  // Rebuilt once per commit before, which on a long history is one closure per
+  // commit for a test that depends on nothing but the scope.
+  const inScope = (p) => !prefix || p === prefix || p.startsWith(prefix + "/");
+  // A record this parser could not read. Every one of them is a commit or a
+  // file that exists in git and is in none of the figures below, so it is
+  // counted and disclosed rather than dropped: a parser that silently skips is
+  // indistinguishable from a repository that has nothing there.
+  let skipped = 0;
 
   for (const chunk of text.split("\x01")) {
     if (!chunk) continue;
     const nl = chunk.indexOf("\n");
     const head = nl < 0 ? chunk : chunk.slice(0, nl);
     const [oid, at, author] = head.split("\x1f");
-    if (!/^[0-9a-f]{40,64}$/.test(oid || "")) continue;   // sha1 and sha256 both
+    if (!/^[0-9a-f]{40,64}$/.test(oid || "")) { skipped++; continue; }   // sha1 and sha256 both
     cur = { at: Number(at), author: author || "?", paths: [], adds: 0, edits: 0 };
     commits.push(cur);
     const body = nl < 0 ? "" : chunk.slice(nl + 1);
     const fields = body.split("\0").filter(Boolean);
-    const inScope = (p) => !prefix || p === prefix || p.startsWith(prefix + "/");
     for (let i = 0; i < fields.length; i++) {
       const st = fields[i];
-      if (!/^[A-Z]\d*$/.test(st)) continue;
+      if (!/^[A-Z]\d*$/.test(st)) { skipped++; continue; }
       if (st[0] === "R" || st[0] === "C") {
         const from = fields[++i], to = fields[++i];
-        if (!from || !to) continue;
+        if (!from || !to) { skipped++; continue; }
         // The vote is a lead and takes the population rule with everything else
         // that points somewhere.
         if (admit(to) && inScope(to)) { cur.paths.push(to); cur.edits++; }
@@ -402,7 +437,7 @@ function history(root, { since: requested, windows, breadthCap, prefix = "", sub
         }
       } else {
         const p = fields[++i];
-        if (!p) continue;
+        if (!p) { skipped++; continue; }
         if (!admit(p) || !inScope(p)) continue;
         cur.paths.push(p);
         // An edit is what separates maintenance from creation, so it is counted
@@ -430,13 +465,18 @@ function history(root, { since: requested, windows, breadthCap, prefix = "", sub
     }
   }
 
+  // The window the commits occupy is one measurement, and both readers of it
+  // took their own: two sorts of the same array, and two places for the same
+  // arithmetic to drift.
+  const when = windowSpan(withSource);
+
   return {
     available: true,
-    cutoff, cutoffDay, since, rewrittenFrom: norm.rewritten || "",
+    cutoff, cutoffDay, since, rewrittenFrom: norm.rewritten || "", windows, skipped,
     commits: withSource, fileLast,
     relocations: [...relocations.values()].filter((r) => r.n >= 3).sort((a, b) => b.n - a.n),
-    ...perDirectory(withSource, windows, live),
-    ...coChange(withSource, windows, breadthCap, live),
+    ...perDirectory(withSource, when, live),
+    ...coChange(withSource, when, windows, breadthCap, live),
   };
 }
 
@@ -460,8 +500,7 @@ function windowSpan(commits) {
   return { lo, hi, span: Math.max(hi - lo, 1) };
 }
 
-function perDirectory(commits, windows, live) {
-  const { lo, hi, span } = windowSpan(commits);
+function perDirectory(commits, { lo, hi, span }, live) {
   const dirs = new Map();
   for (const c of commits) {
     const seen = new Set();
@@ -490,7 +529,6 @@ function perDirectory(commits, windows, live) {
     const shares = [...e.authors.values()].sort((a, b) => b - a);
     e.topShare = shares[0] / e.commits;
     e.majorAuthors = shares.filter((n) => n / e.commits >= 0.05).length;
-    e.authorCount = shares.length;
   }
   // How far back "recently" reaches. Ninety days is the convention, but a
   // window shorter than that cannot be asked a ninety-day question, and the
@@ -504,11 +542,18 @@ function perDirectory(commits, windows, live) {
   const recent = hi - horizonDays * 86400;
   const active = [...dirs.values()].filter((e) => e.last >= recent).length;
   const unseen = live.size - dirs.size;
-  return { dirs, lo, hi, span, windows, horizonDays, active, dormant: dirs.size - active, unseen };
+  return { dirs, lo, hi, horizonDays, active, dormant: dirs.size - active, unseen };
 }
 
-function coChange(commits, windows, cap, live) {
-  const { lo, span } = windowSpan(commits);
+// What a pair has to clear to be worth printing: a vote-sum floor, and enough
+// commits under the smaller of the two directories for the share to be a share
+// of something. Named rather than written into the comparison, because both
+// numbers are printed beside the rows they govern — a list that stops at a
+// threshold nobody stated is a truncation the reader cannot see.
+const CO_FLOOR = 0.5;
+const CO_SUPPORT = 3;
+
+function coChange(commits, { lo, span }, windows, cap, live) {
   const pair = new Map();
   const own = new Map();
   let capped = 0;
@@ -538,7 +583,7 @@ function coChange(commits, windows, cap, live) {
     const [a, b] = k.split("\0");
     const total = v.reduce((x, y) => x + y, 0);
     const base = Math.min(own.get(a) || 0, own.get(b) || 0);
-    if (total < 0.5 || base < 3) continue;
+    if (total < CO_FLOOR || base < CO_SUPPORT) continue;
     // A pair naming a directory the tree no longer has cannot be followed, and
     // it outranked everything that could: the two strongest rows on a pinned
     // corpus named four deleted directories. Dropped after the floor, so the
@@ -548,13 +593,18 @@ function coChange(commits, windows, cap, live) {
     pairs.push({ a, b, total, base, share: total / base, profile: v });
   }
   pairs.sort((x, y) => y.share - x.share);
-  return { pairs, capped, dropped, own };
+  return { pairs, capped, dropped };
 }
 
 // ── Manifests — exact, declared rather than inferred ─────────────────────────
 
 function manifests(root) {
   const hits = [];
+  // Manifests the rules below refuse. The name-collision drop already travelled
+  // to the reader with its count and its reason; these two did not, so a
+  // repository whose only package.json is a workspace glob printed "none found"
+  // and looked like a repository that declares nothing.
+  const noise = [];
   const walk = (abs, depth) => {
     if (depth > 3) return;
     let entries;
@@ -592,8 +642,11 @@ function manifests(root) {
           // still declares a module, because the separator is required. A
           // scaffold spelling enters this list when a real repository shows it,
           // never in anticipation; docs/research/findings.md carries the count.
+          const shapeless = !keep;
           if (/(^|\/)(__tests__|fixtures?|playground|examples?|testdata|templates?|template[-_.][^/]*)\//.test(rel)) keep = false;
-          if (keep) hits.push({ path: dirname(rel) === "." ? "" : dirname(rel), eco: hit.eco, file: e.name, name });
+          const at = dirname(rel) === "." ? "" : dirname(rel);
+          if (keep) hits.push({ path: at, eco: hit.eco, file: e.name, name });
+          else noise.push({ path: at, why: shapeless ? "shape" : "path" });
         }
       }
     }
@@ -619,7 +672,7 @@ function manifests(root) {
     if (prior) prior.eco = [...new Set([...prior.eco.split("/"), h.eco])].join("/");
     else modules.push({ path: h.path, eco: h.eco, file: h.file });
   }
-  return { modules, filtered: hits.filter(copies).map((h) => ({ path: h.path, name: h.name })) };
+  return { modules, filtered: hits.filter(copies).map((h) => ({ path: h.path, name: h.name })), noise };
 }
 
 function readAll(abs) {
@@ -661,4 +714,4 @@ function snapshot({ version, at, since, files, dirs, spans }) {
   };
 }
 
-export { inventory, history, normalizeSince, CHARS_PER_TOKEN, CHARS_PER_TOKEN_PROSE, proseTokens, manifests, submodulePaths, byDirectory, testConvention, scatter, snapshot, median, pct, day, num, tokens, git, tryGit, SOURCE_EXT, SKIP_DIR };
+export { inventory, history, CHARS_PER_TOKEN, proseTokens, manifests, submodulePaths, byDirectory, testConvention, scatter, snapshot, median, pct, day, num, count, maxOf, tokens, tryGit, CO_FLOOR, CO_SUPPORT };
