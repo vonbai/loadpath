@@ -8,9 +8,10 @@
 //   node tests/mutate.mjs --list   name them without running
 
 import { readFileSync, writeFileSync, cpSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -233,27 +234,81 @@ const MUTANTS = [
 const list = process.argv.includes("--list");
 if (list) { MUTANTS.forEach(([n], i) => console.log(`${String(i + 1).padStart(2)}. ${n}`)); process.exit(0); }
 
-const survivors = [], broken = [], resurrected = [], notRun = [];
-for (const [name, file, from, to, cls] of MUTANTS) {
-  if (cls?.uncovered) { notRun.push([name, cls.uncovered]); continue; }
+const run = promisify(execFile);
+
+// One mutant is a whole acceptance run over its own copy of the tree, and the
+// suite outgrew doing them one at a time: 82 exercised mutants at 15 seconds
+// each is 21 minutes of wall clock, on the machine this is actually run on.
+// That matters because this is a local gate — the four suites are what a
+// change passes before it lands, not what a server reports afterwards — and a
+// twenty-minute gate is a gate that gets skipped, which is the exact failure a
+// mutation check exists to prevent.
+//
+// The mutants share nothing: a separate mkdtemp copy each, and every fixture
+// the suite builds is a mkdtemp of its own. So a pool moves the clock and not
+// one verdict — measured at 4.6 minutes across six lanes, with the same 87
+// verdicts in the same order.
+//
+// One lane fewer than the machine has, and never more than six: each lane's
+// suite spawns git and go of its own, so lanes past that contend rather than
+// parallelise. `availableParallelism` arrived in Node 18.14 and this project
+// supports 18, so the older spelling stands behind it. The whole `os` module
+// is imported rather than the name, because a named import of something a
+// builtin does not export is a load-time SyntaxError, not a fallback.
+const LANES = Math.max(1, Math.min((os.availableParallelism?.() ?? os.cpus().length) - 1, 6));
+
+// The copy is paid once per mutant, so whatever it carries is multiplied by
+// the mutant count. `.corpus` is three full public checkouts that
+// tests/measure.mjs leaves behind: 51 MB and half a second here, 4 GB of
+// copying across a run, and not one byte of it read by an acceptance test.
+// Excluding it takes the copy to under a megabyte and 7 ms.
+//
+// The `.git` test matches the directory itself and not only its contents. A
+// filter looking for "/.git/" alone admits the directory entry and then
+// refuses every child, which leaves each copy claiming to be a git repository
+// with no objects in it.
+const carried = (s) => !/(^|\/)(\.git|node_modules|\.corpus)(\/|$)/.test(s.slice(ROOT.length));
+
+// A verdict, and nothing printed: the lanes finish out of order and the report
+// below is written in the order the mutants are declared.
+async function verdict([, file, from, to, cls]) {
+  if (cls?.uncovered) return { kind: "notRun", why: cls.uncovered };
   const dir = mkdtempSync(join(tmpdir(), "lp-mut-"));
   try {
-    cpSync(ROOT, dir, { recursive: true, filter: (s) => !s.includes("/.git/") && !s.includes("node_modules") });
+    cpSync(ROOT, dir, { recursive: true, filter: carried });
     const p = join(dir, file);
     const src = readFileSync(p, "utf8");
-    if (!src.includes(from)) { broken.push(name); continue; }
+    if (!src.includes(from)) return { kind: "broken" };
     writeFileSync(p, src.replace(from, to));
     let lived = false;
     try {
-      execFileSync("node", ["--test", "tests/loadpath.test.mjs"], { cwd: dir, stdio: "pipe", timeout: 300000 });
+      await run("node", ["--test", "tests/loadpath.test.mjs"], { cwd: dir, timeout: 300000, maxBuffer: 64 * 1024 * 1024 });
       lived = true;
     } catch { /* suite failed: the mutant was killed */ }
     // An equivalent mutant is asserted to survive. A kill means the proof is
     // wrong, which is a finding about the claim rather than about the tests.
-    if (cls?.equivalent) { if (!lived) resurrected.push([name, cls.equivalent]); }
-    else if (lived) survivors.push(name);
+    if (cls?.equivalent) return lived ? { kind: "equivalent" } : { kind: "resurrected", why: cls.equivalent };
+    return lived ? { kind: "survived" } : { kind: "killed" };
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
+
+// A semaphore rather than batches: a batch waits for its slowest member before
+// starting the next, and a mutant killed by the first failing test finishes in
+// a fraction of one that runs the suite to the end.
+const results = new Array(MUTANTS.length);
+let next = 0;
+await Promise.all(Array.from({ length: LANES }, async () => {
+  for (let i = next++; i < MUTANTS.length; i = next++) results[i] = await verdict(MUTANTS[i]);
+}));
+
+const survivors = [], broken = [], resurrected = [], notRun = [];
+MUTANTS.forEach(([name], i) => {
+  const r = results[i];
+  if (r.kind === "notRun") notRun.push([name, r.why]);
+  else if (r.kind === "broken") broken.push(name);
+  else if (r.kind === "resurrected") resurrected.push([name, r.why]);
+  else if (r.kind === "survived") survivors.push(name);
+});
 
 const ran = MUTANTS.length - notRun.length;
 const equivalent = MUTANTS.filter((m) => m[4]?.equivalent).length - resurrected.length;

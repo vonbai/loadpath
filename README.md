@@ -1,6 +1,5 @@
 # Loadpath
 
-[![CI](https://github.com/vonbai/loadpath/actions/workflows/ci.yml/badge.svg)](https://github.com/vonbai/loadpath/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-2f6f62.svg)](LICENSE)
 
 An Agent Skill that traces how a codebase carries its weight — where code sits, which way dependencies run, which paths are frozen, and what the repository has already moved.
@@ -54,10 +53,12 @@ Calling a real analyzer is not the same as trusting it: the dominant failure mod
 Requires Node 18 or newer. No dependencies.
 
 ```bash
-npx --yes skills add vonbai/loadpath --global
+npx --yes skills add vonbai/loadpath@v0.2.2 --global
 ```
 
-Pin a release with `vonbai/loadpath@v0.2.2`. `node ~/.agents/skills/loadpath/scripts/loadpath.mjs --version` says what an installed copy actually is. Update with `npx --yes skills update loadpath --global`; remove with `npx --yes skills remove loadpath --global`.
+The unpinned form, `vonbai/loadpath`, tracks `main`: every change there has passed the four suites below on a developer machine, but only a release-tagged state has run them across Node 18, 22 and 24 on Linux with a cold analyzer cache.
+
+`node ~/.agents/skills/loadpath/scripts/loadpath.mjs --version` says what an installed copy actually is. Update with `npx --yes skills update loadpath --global`; remove with `npx --yes skills remove loadpath --global`.
 
 Verify:
 
@@ -67,7 +68,7 @@ node ~/.agents/skills/loadpath/scripts/loadpath.mjs /path/to/repo
 
 ## Verification
 
-Everything published here is recomputed by the repository itself.
+Everything published here is recomputed by the repository itself. These four are the gate a change passes before it lands, run locally; the same battery runs on Node 18, 22 and 24 at each release tag, which is where cross-platform behaviour and a cold analyzer cache are worth paying for.
 
 - `node --test tests/loadpath.test.mjs` — 103 acceptance tests over synthetic repositories built per case.
 - `node tests/mutate.mjs` — 87 one-line feature deletions; **a surviving mutant fails the build.** v0.1.0's suite let 14 of 20 pass, including the line that broke its own headline claim. Three are marked *equivalent* — a second guard already produces the same observable, so they are asserted to survive and a kill means the stated proof went stale — and five are listed every run as *not exercised*, with the toolchain each would need. The number is never the claim; the list is.

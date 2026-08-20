@@ -1,21 +1,35 @@
-name: CI
+# Local acceptance gates every change. The four suites — tests/loadpath.test.mjs,
+# tests/contract.mjs, tests/mutate.mjs, tests/measure.mjs — are what a change
+# passes before it lands, and they are the gate. Nothing here is.
+#
+# This battery runs at the release boundary and on demand, and at no other
+# time, because mutation testing is a release blocker rather than a push
+# metric: a surviving mutant stops a release, and re-proving that on every push
+# buys a number nobody reads at a cost somebody pays.
+#
+# What it adds over a local run is cross-platform truth, which is a release
+# concern by nature — Node 18's glob semantics against 22 and 24, the Linux
+# toolchain pins, and the analyzers meeting a cold cache rather than the warm
+# one every development machine has.
+name: Release battery
 
 on:
   push:
-    branches: [main]
-  pull_request:
+    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: loadpath-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   acceptance:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The mutation leg sets this, not the other two: 82 exercised mutants, each
+    # a full acceptance run measured at 15 s. Six lanes on an 18-way machine run
+    # them in 4.6 minutes; one lane is that 15 s times 82, or 21 minutes. A
+    # hosted runner takes fewer lanes and a slower suite in each, so the ceiling
+    # sits well above the measurement rather than just above it.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
