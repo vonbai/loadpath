@@ -11,13 +11,13 @@ Loadpath 追踪真实的荷载路径。它**指向值得读的代码，不替你
 
 ## What it emits
 
-One command, 545–1,056 tokens across the three pinned corpora (36 to 1,093 source files), and 666–2,977 with `--structure`:
+One command, 813–1,493 tokens across the three pinned corpora (36 to 1,093 source files), and 920–3,500 with `--structure`. Those are upper bounds: the divisor is calibrated with tiktoken against this tool's densest output, not a general prose ratio.
 
 - **the distribution first** — median, p90 and max files per directory and lines per file, so every row after it is readable. `136f` means nothing until `median 7` is on the page; then it is 19× the median.
 - **activity** — what was touched recently, and what was not. A directory with no recent commits is *unmeasured*, not known to be safe.
 - **commit share** — the top author's fraction of a directory's commits, beside the raw count.
 - **relocations** — what this repository has already moved, from git's rename records. The migration already done is usually the best evidence of the one in progress.
-- **co-change** — directories changing in the same commits, one commit casting one vote split across the pairs it implies, with a per-window profile and its min–max.
+- **co-change** — directories changing in the same commits, one commit casting one vote split across the pairs it implies, with the vote it received in every window and the denominator its share is taken over.
 - **dependencies** — from the ecosystem's own analyzer, named in the output. Entanglement as *groups*, and how many layers deep the load path runs.
 
 `--structure` adds every directory and the entangled groups. `--dir PATH` gives one subtree file by file.
@@ -40,7 +40,7 @@ Loadpath does not parse imports. It runs the ecosystem's own analyzer and names 
 
 | Ecosystem | Analyzer | Granularity | Needs |
 |---|---|---|---|
-| Go | `go list -e -mod=readonly` | package = directory | `go` on PATH |
+| Go | `go list -e -mod=readonly`, every module | package = directory | `go` on PATH, warm module cache |
 | C# | `.csproj` `<ProjectReference>` | project | nothing |
 | Python | `grimp` | module directory | `pip install grimp` |
 | Node/TS | `madge` | file directory | a warm npx cache |
@@ -56,7 +56,7 @@ Requires Node 18 or newer. No dependencies.
 npx --yes skills add vonbai/loadpath --global
 ```
 
-Pin a release with `vonbai/loadpath@v0.2.0`. Update with `npx --yes skills update loadpath --global`; remove with `npx --yes skills remove loadpath --global`.
+Pin a release with `vonbai/loadpath@v0.2.2`. `node ~/.agents/skills/loadpath/scripts/loadpath.mjs --version` says what an installed copy actually is. Update with `npx --yes skills update loadpath --global`; remove with `npx --yes skills remove loadpath --global`.
 
 Verify:
 
@@ -68,8 +68,8 @@ node ~/.agents/skills/loadpath/scripts/loadpath.mjs /path/to/repo
 
 Everything published here is recomputed by the repository itself.
 
-- `node --test tests/loadpath.test.mjs` — 41 acceptance tests over synthetic repositories built per case.
-- `node tests/mutate.mjs` — 26 one-line feature deletions; **a surviving mutant fails the build.** v0.1.0's suite let 14 of 20 pass, including the line that broke its own headline claim.
+- `node --test tests/loadpath.test.mjs` — 66 acceptance tests over synthetic repositories built per case.
+- `node tests/mutate.mjs` — 58 one-line feature deletions; **a surviving mutant fails the build.** v0.1.0's suite let 14 of 20 pass, including the line that broke its own headline claim. Three are marked *equivalent* — a second guard already produces the same observable, so they are asserted to survive and a kill means the stated proof went stale — and five are listed every run as *not exercised*, with the toolchain each would need. The number is never the claim; the list is.
 - `node tests/measure.mjs` — every published figure recomputed from three pinned public repositories and compared against `tests/measure-baseline.json`. A pin that does not resolve fails the run.
 - `node tests/contract.mjs` — the skill's frontmatter, budget, pointers and vocabulary.
 

@@ -69,6 +69,8 @@ const MANIFESTS = [
   { file: "composer.json", eco: "PHP" },
   { file: "pnpm-workspace.yaml", eco: "Node" },
   { file: "tsconfig.json", eco: "TypeScript" },
+  { suffix: ".sln", eco: "C#" },
+  { suffix: ".csproj", eco: "C#" },
 ];
 
 // ── Small helpers ────────────────────────────────────────────────────────────
@@ -86,7 +88,19 @@ const pct = (xs, p) => {
 const day = (t) => new Date(t * 1000).toISOString().slice(0, 10);
 const num = (n) => n.toLocaleString("en-US");
 // Token estimate. A proxy, stated as one wherever it is printed.
-const tokens = (s) => Math.round(s.length / 3.6);
+// Upper bounds, not estimates — a budget that can be exceeded is not a budget.
+// Measured with tiktoken (o200k_base and cl100k_base agree to within 1%) over
+// this repository's own bytes. Two, because prose and a table of paths and
+// numbers do not tokenize alike, and one ratio applied to both must be wrong
+// somewhere: 4.55 chars/token for SKILL.md, 3.8 for the prose-heavy orient
+// view, 2.9 for a structure page, 2.66 for the structure table body alone.
+// Each divisor sits just under the densest shape it covers, so neither figure
+// is ever optimistic. A general "about 3.6" was 36% optimistic on exactly the
+// output --budget trims, which is the half that matters.
+const CHARS_PER_TOKEN = 2.6;        // tool output: tables of paths and numbers
+const CHARS_PER_TOKEN_PROSE = 4.4;  // markdown prose: SKILL.md and references
+const tokens = (s) => Math.round(s.length / CHARS_PER_TOKEN);
+const proseTokens = (s) => Math.round(s.length / CHARS_PER_TOKEN_PROSE);
 
 function git(root, args, { buffer = false } = {}) {
   return execFileSync("git", ["-C", root, ...args], {
@@ -103,7 +117,20 @@ function tryGit(root, args, opts) {
 
 // ── Inventory — exact, from the filesystem ───────────────────────────────────
 
-function inventory(root, prefix = "") {
+// Paths git tracks as submodules. Their code belongs to another repository, and
+// counting it makes the filesystem half describe one project while the git half
+// describes another.
+function submodulePaths(root) {
+  const out = new Set();
+  const f = join(root, ".gitmodules");
+  if (!existsSync(f)) return out;
+  try {
+    for (const m of readAll(f).matchAll(/^\s*path\s*=\s*(.+)$/gm)) out.add(m[1].trim());
+  } catch { /* unreadable: skip nothing */ }
+  return out;
+}
+
+function inventory(root, prefix = "", submodules = new Set()) {
   const files = [];
   const unreadable = [];
   const walk = (abs) => {
@@ -119,6 +146,7 @@ function inventory(root, prefix = "") {
       if (!e.isFile()) continue;
       const rel = relative(root, p).split(sep).join("/");
       if (prefix && !rel.startsWith(prefix + "/") && rel !== prefix) continue;
+      if ([...submodules].some((sm) => rel === sm || rel.startsWith(sm + "/"))) continue;
       if (!SOURCE_EXT.has(extname(e.name))) continue;
       if (GENERATED_PATH.some((re) => re.test(rel))) continue;
       const m = measure(p);
@@ -139,21 +167,17 @@ function measure(abs) {
   // A file that cannot be read is not a file of zero lines. It leaves the
   // inventory rather than entering every total, median and percentile as 0.
   try { fd = openSync(abs, "r"); } catch { return { unreadable: true }; }
-  let lines = 0, bytes = 0, first = "", binary = false, partial = false, n;
+  let lines = 0, bytes = 0, first = "", partial = false, n;
   try {
     while ((n = readSync(fd, BUF, 0, BUF.length, null)) > 0) {
       if (bytes === 0) first = BUF.subarray(0, Math.min(n, 400)).toString("utf8");
-      for (let i = 0; i < n; i++) {
-        const b = BUF[i];
-        if (b === 10) lines++;
-        else if (b === 0) binary = true;
-      }
+      for (let i = 0; i < n; i++) if (BUF[i] === 10) lines++;
       bytes += n;
     }
   } catch { partial = true; }
   finally { closeSync(fd); }
   if (partial) return { unreadable: true };   // a partial count is not an exact one
-  return { lines, bytes, binary, generated: GENERATED_HEAD.test(first) };
+  return { lines, bytes, generated: GENERATED_HEAD.test(first) };
 }
 
 // Which test convention does this repository use? Voted, not assumed.
@@ -169,10 +193,9 @@ function byDirectory(files, isTest) {
   const dirs = new Map();
   for (const f of files) {
     let d = dirs.get(f.dir);
-    if (!d) dirs.set(f.dir, (d = { path: f.dir, files: 0, lines: 0, bytes: 0, tests: 0, lineList: [] }));
-    d.files++; d.lines += f.lines; d.bytes += f.bytes;
+    if (!d) dirs.set(f.dir, (d = { path: f.dir, files: 0, lines: 0, tests: 0 }));
+    d.files++; d.lines += f.lines;
     if (isTest(f.path)) d.tests++;
-    d.lineList.push(f.lines);
   }
   return dirs;
 }
@@ -180,11 +203,44 @@ function byDirectory(files, isTest) {
 // ── History — exact, from git ────────────────────────────────────────────────
 //
 // One pass with --name-status -M -z yields file lists, add/delete/rename
-// status, author and timestamp together. NUL separation is not optional: git
+// status, author and timestamp together. The timestamp is the *committer*
+// date, because that is what --since filters on: bucketing by author date
+// put 99.7% of a rebased repository's commits in the final window and
+// annotated every pair "one window only" as though it were a fact about time. NUL separation is not optional: git
 // C-quotes any path holding a non-ASCII byte, a quote, a tab or a newline, and
 // such a path parses its own extension wrongly and vanishes.
 
-function history(root, { since, windows, breadthCap, prefix = "" }) {
+// Git reads `1y` as a date, not a duration. It resolves to nineteen days ago,
+// `6mo` to fourteen, and `30d` to ten days in the *future* — a day-of-month, so
+// the window holds nothing. All three exit 0, so the answer is silently wrong
+// rather than refused, which is the one failure shape this tool exists to stop.
+// The compact spellings are rewritten to the dotted form git reads as a
+// duration, and the rewrite is disclosed beside the window it produced.
+const SINCE_UNITS = {
+  y: "years", yr: "years", yrs: "years", year: "years", years: "years",
+  mo: "months", mos: "months", mon: "months", month: "months", months: "months",
+  w: "weeks", wk: "weeks", wks: "weeks", week: "weeks", weeks: "weeks",
+  d: "days", day: "days", days: "days",
+  h: "hours", hr: "hours", hrs: "hours", hour: "hours", hours: "hours",
+};
+function normalizeSince(input) {
+  const t = String(input).trim();
+  const m = /^(\d+)\s*([A-Za-z]+)$/.exec(t);
+  if (!m) return { since: t };
+  const unit = SINCE_UNITS[m[2].toLowerCase()];
+  // `m` is minutes to some readers and months to others, and git agrees with
+  // neither. Naming both spellings is more use than picking one.
+  if (!unit) return { since: t, ambiguous: `${m[1]}${m[2]}` };
+  const canonical = `${m[1]}.${unit}`;
+  return canonical === t ? { since: t } : { since: canonical, rewritten: t };
+}
+
+function history(root, { since: requested, windows, breadthCap, prefix = "" }) {
+  const norm = normalizeSince(requested);
+  if (norm.ambiguous) {
+    return { available: false, reason: `--since ${norm.ambiguous} is ambiguous — git reads it as a day of the month, not a duration. Write it as ${/^\d+m$/i.test(norm.ambiguous) ? `${parseInt(norm.ambiguous, 10)}.months or ${parseInt(norm.ambiguous, 10)}.minutes` : "N.days, N.weeks, N.months or N.years"}.` };
+  }
+  const since = norm.since;
   const shallow = tryGit(root, ["rev-parse", "--is-shallow-repository"]);
   if (shallow.ok && shallow.out.trim() === "true") {
     return { available: false, reason: "shallow clone — every file reads as added, so history figures would be fabricated. Re-clone without --depth." };
@@ -194,19 +250,24 @@ function history(root, { since, windows, breadthCap, prefix = "" }) {
     return { available: false, reason: `not a git repository, or no history (${probe.err})` };
   }
   // Git resolves an unparseable date to *now* and exits 0, so a typo silently
-  // empties the window. Ask git to parse it first.
-  // Git resolves an unparseable date to *now* and exits 0, so `--since 1y`
-  // silently empties the window. A resolved cutoff within a few seconds of
-  // now is that failure, not a request for the last few seconds.
+  // empties the window. A resolved cutoff within a few seconds of now is that
+  // failure, not a request for the last few seconds. Ask git to parse it first.
   const dateCheck = tryGit(root, ["rev-parse", `--since=${since}`]);
   const cutoff = Number((dateCheck.out || "").match(/--max-age=(\d+)/)?.[1] ?? 0);
   if (!dateCheck.ok || !cutoff || Math.abs(cutoff - Date.now() / 1000) < 5) {
     return { available: false, reason: `--since ${since} is not a date git understands; git resolves it to "now", which would silently report no history` };
   }
+  // A cutoff in the future is a day-of-month reading that normalisation missed.
+  if (cutoff > Date.now() / 1000) {
+    return { available: false, reason: `--since ${requested} resolves to a date in the future, so the window holds nothing. Write it as N.days, N.weeks, N.months or N.years.` };
+  }
+  // The resolved cutoff is printed, always, so any remaining disagreement
+  // between the word typed and the window measured is visible rather than silent.
+  const cutoffDay = new Date(cutoff * 1000).toISOString().slice(0, 10);
 
   const res = tryGit(root, [
     "-c", "core.quotePath=false", "log", `--since=${since}`, "--no-merges",
-    "-M", "--name-status", "-z", "--format=%x01%H%x1f%at%x1f%aN",
+    "-M", "--name-status", "-z", "--format=%x01%H%x1f%ct%x1f%aN",
   ], { buffer: true });
   if (!res.ok) return { available: false, reason: res.err };
 
@@ -236,7 +297,7 @@ function history(root, { since, windows, breadthCap, prefix = "" }) {
           cur.edits++;
           const move = inScope(from) || inScope(to) ? commonMove(from, to) : null;
           if (move) {
-            const k = `${move[0]} ${move[1]}`;
+            const k = `${move[0]}\0${move[1]}`;
             const r = relocations.get(k) || { from: move[0], to: move[1], n: 0, at: cur.at };
             r.n++; r.at = Math.max(r.at, cur.at); relocations.set(k, r);
           }
@@ -255,6 +316,7 @@ function history(root, { since, windows, breadthCap, prefix = "" }) {
 
   return {
     available: true,
+    cutoff, cutoffDay, since, rewrittenFrom: norm.rewritten || "",
     commits: withSource,
     relocations: [...relocations.values()].filter((r) => r.n >= 3).sort((a, b) => b.n - a.n),
     ...perDirectory(withSource, windows),
@@ -322,7 +384,7 @@ function coChange(commits, windows, cap) {
     const vote = (2 / (ds.length * (ds.length - 1))) * (c.edits === 0 ? 0.15 : 1);
     for (let i = 0; i < ds.length; i++) {
       for (let j = i + 1; j < ds.length; j++) {
-        const k = ds[i] + " " + ds[j];
+        const k = ds[i] + "\0" + ds[j];
         let v = pair.get(k);
         if (!v) pair.set(k, (v = new Array(windows).fill(0)));
         v[w] += vote;
@@ -331,11 +393,11 @@ function coChange(commits, windows, cap) {
   }
   const pairs = [];
   for (const [k, v] of pair) {
-    const [a, b] = k.split(" ");
+    const [a, b] = k.split("\0");
     const total = v.reduce((x, y) => x + y, 0);
     const base = Math.min(own.get(a) || 0, own.get(b) || 0);
     if (total < 0.5 || base < 3) continue;
-    pairs.push({ a, b, total, share: total / base, profile: v });
+    pairs.push({ a, b, total, base, share: total / base, profile: v });
   }
   pairs.sort((x, y) => y.share - x.share);
   return { pairs, capped, own };
@@ -354,7 +416,7 @@ function manifests(root) {
         if (SKIP_DIR.has(e.name) || e.name.startsWith(".")) continue;
         walk(join(abs, e.name), depth + 1);
       } else {
-        const hit = MANIFESTS.find((m) => m.file === e.name);
+        const hit = MANIFESTS.find((m) => m.file === e.name || (m.suffix && e.name.endsWith(m.suffix)));
         if (hit) {
           const rel = relative(root, join(abs, e.name)).split(sep).join("/");
           // A workspace glob is not a module boundary: on one real repository
@@ -368,7 +430,12 @@ function manifests(root) {
             } catch { keep = false; }
           }
           if (/(^|\/)(__tests__|fixtures?|playground|examples?|testdata|templates?)\//.test(rel)) keep = false;
-          if (keep) found.push({ path: dirname(rel) === "." ? "" : dirname(rel), eco: hit.eco, file: e.name });
+          if (keep) {
+            const at = dirname(rel) === "." ? "" : dirname(rel);
+            const prior = found.find((x) => x.path === at);
+            if (prior) prior.eco = [...new Set([...prior.eco.split("/"), hit.eco])].join("/");
+            else found.push({ path: at, eco: hit.eco, file: e.name });
+          }
         }
       }
     }
@@ -386,4 +453,4 @@ function readAll(abs) {
   } finally { closeSync(fd); }
 }
 
-export { inventory, history, manifests, byDirectory, testConvention, median, pct, day, num, tokens, git, tryGit, SOURCE_EXT, SKIP_DIR };
+export { inventory, history, normalizeSince, CHARS_PER_TOKEN, CHARS_PER_TOKEN_PROSE, proseTokens, manifests, submodulePaths, byDirectory, testConvention, median, pct, day, num, tokens, git, tryGit, SOURCE_EXT, SKIP_DIR };

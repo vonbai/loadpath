@@ -24,7 +24,7 @@ Three consequences hold in every use:
 ## Run it
 
 ```
-node scripts/loadpath.mjs [REPO]              orient — a few hundred to ~1k tokens
+node scripts/loadpath.mjs [REPO]              orient — 813–1,493 tokens measured
 node scripts/loadpath.mjs [REPO] --structure  every directory, plus entangled groups
 node scripts/loadpath.mjs [REPO] --dir PATH   one subtree, file by file
 ```
@@ -39,7 +39,7 @@ node scripts/loadpath.mjs [REPO] --dir PATH   one subtree, file by file
 - **activity** — directories touched recently, and how many were not. A directory with no recent commits is *unmeasured*, not known to be safe: on real repositories a fifth to two thirds of files go untouched in a window while some of them still carry later defects.
 - **top author N% of Mc** — the share of commits by the largest contributor, beside the raw count. Concentration ranked first among 65 metrics in a defect study where the raw count did not; it is undefined where nothing was committed, which is why both are printed.
 - **relocations** — what this repository has already moved, from git's rename records. The migration it has already done is usually the best evidence of the one it is mid-way through.
-- **co-change** — directories changing in the same commits, one commit casting one vote split across the pairs it implies, bucketed into time windows. Each row carries its profile and its min–max, because an average can look excellent while its worst case is total. Commits wider than the cap are sweeps, not coupling, and their count is disclosed.
+- **co-change** — directories changing in the same commits, one commit casting one vote split across the pairs it implies, bucketed into time windows. Each row carries the vote it received in every window, and the denominator the share is taken over, because an average can look excellent while its worst case is total. Commits wider than the cap are sweeps, not coupling, and their count is disclosed.
 - **dependencies** — from the ecosystem's own analyzer, named in the output, or Not measured. Entanglement is reported as **groups**: inside a group nothing can be built, tested, or replaced alone. Layer depth is how far weight travels before it reaches something that depends on nothing.
 
 **Done reading when** every emitted section has produced either a lead you will follow or an explicit "nothing here", and you have said which.

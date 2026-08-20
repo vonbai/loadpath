@@ -7,7 +7,7 @@
 // median — a fact about the distribution, exact and checkable.
 
 import { dirname, basename } from "node:path";
-import { median, pct, day, num } from "./scan.mjs";
+import { median, pct, day, num, tokens } from "./scan.mjs";
 
 // ── L0: orient ───────────────────────────────────────────────────────────────
 
@@ -45,9 +45,14 @@ export function renderL0({ files, dirs, conv, hist, mans, deps, root, since, win
     const live = [...hist.dirs.entries()].filter(([p]) => dirs.has(p));
     const active = live.filter(([, d]) => d.last >= cutoff).length;
     const dormant = live.length - active;
-    out.push(`history     ${num(hist.commits.length)} commits over ${days} days, since ${since}`);
-    out.push(`activity    ${active} of ${live.length} directories touched in the last 90 days, ${dormant} not`);
-    if (dormant) out.push(`            a directory with no recent commits is unmeasured here, not known to be safe`);
+    const unseen = dirs.size - live.length;
+    // A rewritten spelling is shown as the rewrite it was, never as if the
+    // reader had typed the thing that actually ran.
+    const asked = hist.rewrittenFrom ? `--since ${hist.rewrittenFrom} → ${hist.since}` : `--since ${since}`;
+    out.push(`history     ${num(hist.commits.length)} commits since ${hist.cutoffDay} (${asked}), spanning ${days} days`);
+    out.push(`activity    ${active} touched in the last 90 days, ${dormant} not, ` +
+             `${unseen} with no commit in this window at all — of ${dirs.size} directories`);
+    if (dormant || unseen) out.push(`            a directory with no recent commit is unmeasured here, not known to be safe`);
   } else {
     out.push(`history     not measured — ${hist.reason}`);
   }
@@ -131,7 +136,7 @@ export function renderL1({ dirs, hist, deps, budget }) {
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
     const s = draw(mid);
-    if (s.length / 3.6 <= budget) { best = s; lo = mid + 1; } else hi = mid - 1;
+    if (tokens(s) <= budget) { best = s; lo = mid + 1; } else hi = mid - 1;
   }
   const head = hist.available
     ? "  files lines tests commits share/authors last-touched layer  directory"
@@ -154,12 +159,15 @@ export function renderCoChange(hist, top) {
   if (hist.capped) out.push(`            ${hist.capped} commits touched more than the breadth cap and were excluded as sweeps`);
   if (!hist.pairs.length) { out.push("            no pair above the reporting floor"); return out.join("\n"); }
   out.push("");
-  out.push(`  share  profile across windows      pair`);
+  out.push(`  Each commit casts one vote, split across the pairs it implies. "share" is`);
+  out.push(`  that vote-sum over the commits of whichever directory moved less often.`);
+  out.push("");
+  out.push(`  share  vote per window          pair`);
   for (const p of hist.pairs.slice(0, top)) {
     const prof = p.profile.map((x) => x.toFixed(1).padStart(4)).join(" ");
     const lo = Math.min(...p.profile), hi = Math.max(...p.profile);
-    const conc = p.profile.filter((x) => x > 0).length === 1 ? "  one window only" : "";
-    out.push(`  ${(p.share * 100).toFixed(0).padStart(4)}%  [${prof} ]  min ${lo.toFixed(1)} max ${hi.toFixed(1)}  ${p.a} + ${p.b}${conc}`);
+    const conc = p.profile.filter((x) => x > 0).length === 1 ? "  in one window" : "";
+    out.push(`  ${(p.share * 100).toFixed(0).padStart(4)}%  [${prof} ]  of ${p.base}c  ${p.a} + ${p.b}${conc}`);
   }
   out.push("");
   out.push(`  Directories changing together is the Common Closure criterion, a design`);

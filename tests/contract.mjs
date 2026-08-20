@@ -5,6 +5,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { proseTokens } from "../skills/loadpath/scripts/scan.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const S = join(ROOT, "skills", "loadpath");
@@ -27,9 +28,9 @@ else {
 }
 
 const lines = text.split("\n").length;
-const tok = text.length / 3.6;
+const tok = proseTokens(text);
 if (lines > 500) errors.push(`SKILL.md is ${lines} lines; the budget is 500`);
-if (tok > 5000) errors.push(`SKILL.md is ~${Math.round(tok)} tokens; the budget is 5000`);
+if (tok > 5000) errors.push(`SKILL.md is ≤${tok} tokens; the budget is 5000`);
 
 // codebase-design rejects "boundary" as overloaded and says seam or interface.
 // Two skills loaded together must not contradict each other on vocabulary.
@@ -52,7 +53,7 @@ for (const need of ["references/canon.md", "references/language-conventions.md",
 }
 
 if (errors.length) { console.log("FAIL"); errors.forEach((e) => console.log(`  - ${e}`)); process.exit(1); }
-console.log(`OK  SKILL.md ${lines} lines, ~${Math.round(tok)} tokens, pointers resolve, vocabulary clean`);
+console.log(`OK  SKILL.md ${lines} lines, ≤${tok} tokens, pointers resolve, vocabulary clean`);
 
 // ── Documentation consistency ────────────────────────────────────────────────
 //
@@ -109,7 +110,7 @@ const ADR_EVIDENCE = {
   "0005": /export function tarjan\b/,
   "0009": /"--name-status"/,
   "0011": /e\.topShare = shares\[0\]/,
-  "0012": /min \$\{lo/,
+  "0012": /of \$\{p\.base\}c/,
 };
 for (const f of readdirSync(join(ROOT, "docs", "adr"))) {
   const n = f.slice(0, 4);
@@ -121,7 +122,51 @@ for (const f of readdirSync(join(ROOT, "docs", "adr"))) {
   }
 }
 
-// 4. Every flag SKILL.md teaches must exist in the CLI.
+// 4. Published token figures must bracket what the pinned corpora actually
+// produced. Prose is what moves these numbers, so the check has to live where
+// prose is checked; otherwise the README quietly describes an older output.
+{
+  const base = JSON.parse(readFileSync(join(ROOT, "tests", "measure-baseline.json"), "utf8"));
+  const vals = Object.values(base);
+  const n = (x) => Number(String(x).replace(/,/g, ""));
+  const readme = readFileSync(join(ROOT, "README.md"), "utf8");
+  const pairs = [
+    ["orient", /([\d,]+)–([\d,]+) tokens across the three pinned corpora/, vals.map((v) => v.orientTokens)],
+    ["structure", /([\d,]+)–([\d,]+) with `--structure`/, vals.map((v) => v.structureTokens)],
+  ];
+  for (const [name, re, got] of pairs) {
+    const m = re.exec(readme);
+    if (!m) { errors.push(`README states no ${name} token range`); continue; }
+    if (got.some((x) => x == null)) { errors.push(`the baseline records no ${name} token count; re-run tests/measure.mjs --record`); continue; }
+    if (n(m[1]) !== Math.min(...got) || n(m[2]) !== Math.max(...got)) {
+      errors.push(`README's ${name} range ${m[1]}–${m[2]} is not the measured ${Math.min(...got)}–${Math.max(...got)}`);
+    }
+  }
+}
+
+// 5. The installed copy must be able to name itself, and name itself correctly.
+{
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  const cliSrc = readFileSync(join(S, "scripts", "loadpath.mjs"), "utf8");
+  const v = /const VERSION = "([^"]+)";/.exec(cliSrc)?.[1];
+  if (!v) errors.push("loadpath.mjs declares no VERSION; an installed copy cannot say what it is");
+  else if (v !== pkg.version) errors.push(`loadpath.mjs is v${v} and package.json is v${pkg.version}`);
+}
+
+// 6. The counts the README publishes about its own verification must be the
+// counts. These drifted twice by hand before they were checked here.
+{
+  const readme = readFileSync(join(ROOT, "README.md"), "utf8");
+  const suite = readFileSync(join(ROOT, "tests", "loadpath.test.mjs"), "utf8");
+  const mut = readFileSync(join(ROOT, "tests", "mutate.mjs"), "utf8");
+  const tests = [...suite.matchAll(/^test\(/gm)].length;
+  const mutants = [...mut.matchAll(/^  \["/gm)].length;
+  const claimed = (re) => Number(re.exec(readme)?.[1] ?? -1);
+  if (claimed(/(\d+) acceptance tests/) !== tests) errors.push(`README claims ${claimed(/(\d+) acceptance tests/)} acceptance tests; there are ${tests}`);
+  if (claimed(/(\d+) one-line feature deletions/) !== mutants) errors.push(`README claims ${claimed(/(\d+) one-line feature deletions/)} mutants; there are ${mutants}`);
+}
+
+// 7. Every flag SKILL.md teaches must exist in the CLI.
 const cli = readFileSync(join(S, "scripts", "loadpath.mjs"), "utf8");
 for (const m of new Set([...text.matchAll(/`(--[a-z]+)[^`]*`/g)].map((x) => x[1]))) {
   if (!cli.includes(`"${m}"`)) errors.push(`SKILL.md teaches ${m}, which the CLI does not accept`);

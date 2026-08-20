@@ -10,7 +10,7 @@ Every figure below is recomputed by `tests/measure.mjs` from pinned public commi
 
 | Ecosystem | Analyzer | Granularity |
 |---|---|---|
-| Go | `go list -e -mod=readonly -json ./...` | package = directory |
+| Go | `go list -e -mod=readonly -json ./...`, per module | package = directory |
 | C# | `.csproj` `<ProjectReference>` | project |
 | Python | `grimp` | module directory |
 | Node/TS | `madge --extensions --ts-config` | file directory |
@@ -21,9 +21,28 @@ Every figure below is recomputed by `tests/measure.mjs` from pinned public commi
 
 Per-language import regexes recover recall but cannot resolve aliases, re-exports or dynamic imports. For Python the gap is closable by no parser at all: `from x import y` leaves `y` ambiguous between a module and an attribute, so a parser must emit both — 7,644 edges against grimp's 3,061 on one real corpus. Only the module table settles it.
 
-**Why an analyzer is still not trusted.** The dominant failure mode of the Node tools is silent empty output rather than an error: `madge` returns `{}` without `--extensions`, and `dependency-cruiser` returns `modules: []` against current TypeScript. Every analyzer result therefore passes a sanity check — edges present, node count plausible against the file count — and a failed check reports Not measured, never zero.
+**Why an analyzer is still not trusted.** The dominant failure mode of the Node tools is silent empty output rather than an error: `madge` returns `{}` without `--extensions`, and `dependency-cruiser` returns `modules: []` against current TypeScript. Every analyzer result therefore passes a sanity check — edges present, and the node count covering a fifth or more of the subtree the analyzer was pointed at — and a failed check reports Not measured, never zero. Measuring coverage against the whole repository rather than against that subtree would reject a correct graph for looking where it was sent.
 
-**Read-only is not automatic.** Three analyzers in this space mutate state as a side effect: `cargo metadata` writes `Cargo.lock` and reaches the registry, `GOFLAGS=-mod=mod` rewrites `go.mod` and reaches the network, `dotnet package list` auto-restores on .NET 10+. `-mod=readonly` is passed explicitly, and `tests/measure.mjs` asserts the corpus working tree is unchanged after a scan.
+**One module is not one repository.** `go list ./...` stops at the module it runs in, so a repository holding several `go.mod` files was analysed only at its root: on one real repository that was 290 of 420 packages, reported as a complete graph. Every module is now analysed where it lives and its package paths are rebased onto the repository, so each node is one repo-relative directory. Where a module fails to resolve, the count of modules that did is printed beside the edge count rather than left to be inferred.
+
+**Read-only is not automatic.** Three analyzers in this space mutate state as a side effect: `cargo metadata` writes `Cargo.lock` and reaches the registry, `GOFLAGS=-mod=mod` rewrites `go.mod` and reaches the network, `dotnet package list` auto-restores on .NET 10+. `-mod=readonly` is passed explicitly, and so is `GOPROXY=off`: without it a scan of a module with a cold cache downloads its whole dependency tree, which is not what a read does. A vendored module still resolves every internal edge offline; one that is not vendored resolves none, and that is reported as a cold cache with the command that fixes it rather than as an absence of dependencies.
+
+## Token figures
+
+Every published token count is an **upper bound**, not an estimate — a budget that can be exceeded is not a budget. The divisors were measured with `tiktoken` over this repository's own bytes; `o200k_base` and `cl100k_base` agree to within 1%.
+
+| Shape | Measured | Divisor used |
+|---|---|---|
+| SKILL.md prose | 4.55 chars/token | 4.4 |
+| orient view | 3.81 chars/token | 2.6 |
+| structure page | 2.96 chars/token | 2.6 |
+| structure table body | 2.66 chars/token | 2.6 |
+
+Two divisors, because prose and a table of paths and numbers do not tokenize alike and a single ratio must be wrong somewhere. The previous single "about 3.6" was **36% optimistic on exactly the output `--budget` trims**: a stated budget of 1,600 emitted about 2,170 real tokens. Measured against a real tokenizer afterwards, `--budget` 400, 800 and 1,600 now yield 391, 753 and 1,468 — under the stated ceiling in every case, and within 8% of it, so the bound is tight rather than merely safe.
+
+## History windows
+
+Git parses `--since 1y` as a **date, not a duration**. It resolves to about nineteen days ago; `6mo` to fourteen; `30d` to a day-of-month, which on most days is in the *future*, so the window holds nothing. All three exit 0. Compact spellings are normalised to the dotted form git reads as a duration, the rewrite is printed beside the window it produced, and a unit that is genuinely ambiguous — a bare `3m`, months to some readers and minutes to others — is refused with both spellings named rather than guessed at.
 
 ## Graph structure
 
@@ -41,7 +60,7 @@ Four arXiv papers, read in isolation, decided its shape.
 
 **Cap the breadth, and say so.** At breadth 100 a pair's share of one vote is 2×10⁻⁴, so 2,475 such commits would be needed to reach the reporting floor. Capping at 30 preserved a top-15 ranking exactly while cutting a third of the pair operations. The excluded count is disclosed: they are sweeps, not coupling.
 
-**An average alone is not reportable.** On identical predictions a model reached an expected calibration error of 2–3% — which looks excellent — while its maximum hit 99–100%, because opposing regions cancel in the mean. Each pair therefore carries its per-window profile and its min–max.
+**An average alone is not reportable.** On identical predictions a model reached an expected calibration error of 2–3% — which looks excellent — while its maximum hit 99–100%, because opposing regions cancel in the mean. Each pair therefore carries its per-window profile, which is the spread, and the denominator its share is taken over.
 
 ### Rejected after reading
 

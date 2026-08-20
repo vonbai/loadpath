@@ -6,7 +6,9 @@
     "edges": 1,
     "entangled": 0,
     "layers": 2,
-    "analyzer": "go list -e -mod=readonly"
+    "analyzer": "go list -e -mod=readonly",
+    "orientTokens": 813,
+    "structureTokens": 920
   },
   "cli/cli": {
     "sha": "95d3a1db45ab",
@@ -15,7 +17,9 @@
     "edges": 1710,
     "entangled": 0,
     "layers": 14,
-    "analyzer": "go list -e -mod=readonly"
+    "analyzer": "go list -e -mod=readonly",
+    "orientTokens": 1338,
+    "structureTokens": 3075
   },
   "sverweij/dependency-cruiser": {
     "sha": "ec603451d07d",
@@ -24,6 +28,8 @@
     "edges": 40,
     "entangled": 3,
     "layers": 3,
-    "analyzer": "madge"
+    "analyzer": "madge",
+    "orientTokens": 1493,
+    "structureTokens": 3500
   }
 }

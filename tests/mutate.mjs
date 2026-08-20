@@ -17,6 +17,16 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const S = "skills/loadpath/scripts";
 
 // Each mutant removes or inverts one decision the tool is supposed to make.
+// A fourth field classifies the ones a hermetic suite cannot simply kill:
+//
+//   equivalent  a second guard already produces the same observable, so the
+//               mutant CANNOT change behaviour. It must survive; if it starts
+//               dying, the stated proof has gone stale and belongs re-read.
+//   uncovered   killing it needs something this suite will not assume — a
+//               network-isolated machine, a warm npx cache, a pip install.
+//               Listed on every run so the count is never read as coverage.
+//
+// Everything without a fourth field must die.
 const MUTANTS = [
   ["one commit is not split across its pairs", `${S}/scan.mjs`,
     "const vote = (2 / (ds.length * (ds.length - 1)))", "const vote = (1"],
@@ -38,6 +48,12 @@ const MUTANTS = [
     'shallow.out.trim() === "true"', "false"],
   ["object ids must be exactly 40 characters", `${S}/scan.mjs`,
     "/^[0-9a-f]{40,64}$/", "/^[0-9a-f]{40}$/"],
+  ["compact --since spellings are not normalised", `${S}/scan.mjs`,
+    "const canonical = `${m[1]}.${unit}`;", "const canonical = t;"],
+  ["an ambiguous --since unit is guessed at instead of refused", `${S}/scan.mjs`,
+    "if (!unit) return { since: t, ambiguous:", "if (false) return { since: t, ambiguous:"],
+  ["a future cutoff is accepted", `${S}/scan.mjs`,
+    "if (cutoff > Date.now() / 1000) {", "if (false) {"],
   ["an unparseable --since is accepted", `${S}/scan.mjs`,
     "Math.abs(cutoff - Date.now() / 1000) < 5", "false"],
   ["generated files are not filtered", `${S}/scan.mjs`,
@@ -64,19 +80,91 @@ const MUTANTS = [
     "].sort((a, b) => b.files / med - a.files / med)", "]"],
   ["the window profile is not printed", `${S}/report.mjs`,
     "[${prof} ]", "[]"],
-  ["the budget is ignored", `${S}/report.mjs`,
-    "if (s.length / 3.6 <= budget)", "if (true)"],
   ["history keeps directories that no longer exist", `${S}/report.mjs`,
     "filter(([p]) => dirs.has(p))", "filter(() => true)"],
   ["symlinked paths are compared unresolved", `${S}/loadpath.mjs`,
     "try { root = realpathSync(root); } catch { /* keep the literal path */ }", ""],
+
+  // An independent reviewer wrote its own set against the same files by the
+  // same rules; 22 of 26 survived. A hand-curated list measures that the lines
+  // in it are covered, not that the suite resists deletion, so the survivors
+  // are folded in here and the tests were written until each one dies.
+  ["the analyzer coverage gate never fires", `${S}/deps.mjs`,
+    "if (r.nodes.size < 2 || covered < 0.2)", "if (false)"],
+  ["-mod=readonly is dropped from go list", `${S}/deps.mjs`,
+    '"list", "-e", "-mod=readonly", "-json", "./..."', '"list", "-e", "-json", "./..."',
+    { uncovered: "readonly is already the default in a module with a complete go.mod; the difference shows only where GOFLAGS=-mod=mod is set in the environment, which the suite will not set on a contributor's machine." }],
+  ["the offline guard is dropped from go list", `${S}/deps.mjs`,
+    'GOPROXY: "off"', 'GOPROXY: "direct"',
+    { uncovered: "asserting a negative about the network needs an isolated machine; on a warm cache both settings resolve identically." }],
+  ["madge loses --extensions", `${S}/deps.mjs`,
+    '"--json", "--extensions", "ts,tsx,js,jsx,mjs"', '"--json"',
+    { uncovered: "needs a warm npx cache. This is the exact silent-empty-output failure the sanity gate exists for, and the gate itself is covered." }],
+  ["madge loses --ts-config", `${S}/deps.mjs`,
+    'args.push("--ts-config", "./tsconfig.json");', "void 0;",
+    { uncovered: "needs a warm npx cache and a repository with path aliases." }],
+  ["layer depth is always one", `${S}/deps.mjs`,
+    "const depth = Math.max(0, ...level) + 1;", "const depth = 1;"],
+  ["go self-edges are admitted", `${S}/deps.mjs`,
+    "if (dst !== src)", "if (true)",
+    { equivalent: "Go forbids a package importing itself, so `go list` never emits a self-edge for the guard to drop." }],
+  ["the csproj walk stops at depth one", `${S}/deps.mjs`,
+    "if (d > 12) { capped++; return; }", "if (d > 1) { capped++; return; }"],
+  ["python looks only at the repository root", `${S}/deps.mjs`,
+    'const roots = ["", "src"]', 'const roots = [""]',
+    { uncovered: "needs grimp installed; the suite does not pip install." }],
+  ["the installed copy cannot name its version", `${S}/loadpath.mjs`,
+    'const VERSION = "0.2.2";', 'const VERSION = "0.0.0";'],
+  ["only the root Go module is analysed", `${S}/deps.mjs`,
+    "const mods = goModules(root);", "const mods = [root];"],
+  ["a partial module resolution is not disclosed", `${S}/deps.mjs`,
+    "const note = reached < mods.length", "const note = false"],
+  ["the token bound goes back to a general prose ratio", `${S}/scan.mjs`,
+    "const CHARS_PER_TOKEN = 2.6;", "const CHARS_PER_TOKEN = 3.6;"],
+  ["the structure table ignores its budget", `${S}/report.mjs`,
+    "if (tokens(s) <= budget)", "if (true)"],
+  ["p90 is really the max", `${S}/scan.mjs`,
+    "return s[Math.min(Math.floor(s.length * p), s.length - 1)];", "return s[s.length - 1];"],
+  ["merge commits are counted as work", `${S}/scan.mjs`,
+    '"log", `--since=${since}`, "--no-merges"', '"log", `--since=${since}`',
+    { equivalent: "a merge emits no --name-status record, so `commits.filter(c => c.paths.length)` drops it a second time regardless." }],
+  ["the co-change reporting floor is removed", `${S}/scan.mjs`,
+    "if (total < 0.5 || base < 3) continue;", "if (false) continue;"],
+  ["the walk follows symlinks", `${S}/scan.mjs`,
+    "if (e.isSymbolicLink()) continue;", "if (false) continue;",
+    { equivalent: "a symlink dirent reports neither isDirectory nor isFile, so `if (!e.isFile()) continue` two lines down excludes it anyway. The guard states the intent; it is not the only thing enforcing it." }],
+  ["submodules are scanned as first-party code", `${S}/scan.mjs`,
+    'if ([...submodules].some((sm) => rel === sm || rel.startsWith(sm + "/"))) continue;', ""],
+  ["the manifest walk stops at the root", `${S}/scan.mjs`,
+    "if (depth > 3) return;", "if (depth > 0) return;"],
+  ["an unreadable file returns zero lines", `${S}/scan.mjs`,
+    'catch { return { unreadable: true }; }', "catch { return { lines: 0, bytes: 0 }; }"],
+  ["the committer date reverts to the author date", `${S}/scan.mjs`,
+    '"--format=%x01%H%x1f%ct%x1f%aN"', '"--format=%x01%H%x1f%at%x1f%aN"'],
+  ["the resolved cutoff is not reported", `${S}/scan.mjs`,
+    "cutoff, cutoffDay,", ""],
+  ["L2 no longer sorts files by size", `${S}/report.mjs`,
+    "const sorted = [...inSub].sort((a, b) => b.lines - a.lines);", "const sorted = [...inSub];"],
+  ["the single-window annotation is dropped", `${S}/report.mjs`,
+    '? "  in one window" : ""', '? "" : ""'],
+  ["directories with no commit in the window go unmentioned", `${S}/report.mjs`,
+    "const unseen = dirs.size - live.length;", "const unseen = 0;"],
+  ["the co-change denominator is dropped", `${S}/report.mjs`,
+    "of ${p.base}c", ""],
+  ["a trailing slash breaks --dir", `${S}/loadpath.mjs`,
+    "o.dir.replace(/\\/$/, \"\")", "o.dir"],
+  ["the analyzer root ignores nested manifests", `${S}/loadpath.mjs`,
+    "resolve(root, commonAncestor(mans.map((m) => m.path)) || prefix)", "resolve(root, prefix)"],
+  ["the scope prefix is dropped from history", `${S}/loadpath.mjs`,
+    "breadthCap: o.cap, prefix }", "breadthCap: o.cap }"],
 ];
 
 const list = process.argv.includes("--list");
 if (list) { MUTANTS.forEach(([n], i) => console.log(`${String(i + 1).padStart(2)}. ${n}`)); process.exit(0); }
 
-const survivors = [], broken = [];
-for (const [name, file, from, to] of MUTANTS) {
+const survivors = [], broken = [], resurrected = [], notRun = [];
+for (const [name, file, from, to, cls] of MUTANTS) {
+  if (cls?.uncovered) { notRun.push([name, cls.uncovered]); continue; }
   const dir = mkdtempSync(join(tmpdir(), "lp-mut-"));
   try {
     cpSync(ROOT, dir, { recursive: true, filter: (s) => !s.includes("/.git/") && !s.includes("node_modules") });
@@ -84,16 +172,27 @@ for (const [name, file, from, to] of MUTANTS) {
     const src = readFileSync(p, "utf8");
     if (!src.includes(from)) { broken.push(name); continue; }
     writeFileSync(p, src.replace(from, to));
+    let lived = false;
     try {
       execFileSync("node", ["--test", "tests/loadpath.test.mjs"], { cwd: dir, stdio: "pipe", timeout: 300000 });
-      survivors.push(name);                       // suite stayed green: the mutant lives
+      lived = true;
     } catch { /* suite failed: the mutant was killed */ }
+    // An equivalent mutant is asserted to survive. A kill means the proof is
+    // wrong, which is a finding about the claim rather than about the tests.
+    if (cls?.equivalent) { if (!lived) resurrected.push([name, cls.equivalent]); }
+    else if (lived) survivors.push(name);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
-const killed = MUTANTS.length - survivors.length - broken.length;
-console.log(`mutants ${MUTANTS.length}   killed ${killed}   survived ${survivors.length}   stale ${broken.length}`);
-for (const s of survivors) console.log(`  SURVIVED  ${s}`);
-for (const b of broken) console.log(`  STALE     ${b}  (the line this mutant edits no longer exists)`);
-if (survivors.length || broken.length) process.exit(1);
-console.log("every load-bearing deletion is caught.");
+const ran = MUTANTS.length - notRun.length;
+const equivalent = MUTANTS.filter((m) => m[4]?.equivalent).length - resurrected.length;
+const killed = ran - survivors.length - broken.length - equivalent - resurrected.length;
+console.log(`mutants ${MUTANTS.length}   killed ${killed}   survived ${survivors.length}   equivalent ${equivalent}   not exercised ${notRun.length}   stale ${broken.length}`);
+for (const s of survivors) console.log(`  SURVIVED     ${s}`);
+for (const [n, why] of resurrected) console.log(`  PROOF STALE  ${n}\n               was called equivalent because ${why}`);
+for (const b of broken) console.log(`  STALE        ${b}  (the line this mutant edits no longer exists)`);
+// Printed every run, never counted as coverage: a number that hides its own
+// gaps is the failure this repository was rebuilt to stop making.
+for (const [n, why] of notRun) console.log(`  NOT EXERCISED  ${n}\n                 ${why}`);
+if (survivors.length || broken.length || resurrected.length) process.exit(1);
+console.log(`every load-bearing deletion this suite can reach is caught; ${notRun.length} are listed above as out of its reach.`);

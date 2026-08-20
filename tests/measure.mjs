@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node
 import { join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { tokens } from "../skills/loadpath/scripts/scan.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = join(ROOT, "skills", "loadpath", "scripts", "loadpath.mjs");
@@ -70,6 +71,11 @@ function fetchCorpus(c) {
   return dir;
 }
 
+// `--warm` fetches the corpora and downloads Go module dependencies, then
+// stops. The scan itself refuses to reach the network, so on a cold machine
+// something has to do this first — explicitly, and named as what it is.
+const warmOnly = process.argv.includes("--warm");
+
 const results = [];
 let failedFetch = false;
 for (const c of CORPUS) {
@@ -83,9 +89,19 @@ for (const c of CORPUS) {
     continue;
   }
 
+  if (warmOnly) {
+    if (c.eco === "Go") {
+      try { sh("go", ["mod", "download"], dir); console.log(`  warmed  ${c.name}`); }
+      catch (e) { console.log(`  FAIL  ${c.name} go mod download — ${String(e.message).split("\n")[0].slice(0, 120)}`); failedFetch = true; }
+    } else { console.log(`  fetched ${c.name}`); }
+    continue;
+  }
+
   const t0 = Date.now();
   const out = sh("node", [CLI, dir, "--since", "20.years", "--structure"], ROOT);
   const ms = Date.now() - t0;
+  // Both views, because both are published figures.
+  const orient = sh("node", [CLI, dir, "--since", "20.years"], ROOT);
 
   const grab = (re) => Number(out.match(re)?.[1] ?? -1);
   const r = {
@@ -97,18 +113,20 @@ for (const c of CORPUS) {
     entangled: grab(/(\d+) mutually entangled group/),
     layers: grab(/load path is (\d+) layers deep/),
     analyzer: out.match(/via ([^\n]+)/)?.[1] ?? "none",
-    tokens: Math.round(out.length / 3.6),
+    tokens: tokens(out),
+    orientTokens: tokens(orient),
     ms,
   };
-  results.push({ ...r, expect: c.expect });
-
   // The repository must be byte-identical afterwards. Three analyzers in this
-  // space mutate state as a side effect of a read.
-  const dirty = sh("git", ["status", "--porcelain"], dir).trim();
-  r.clean = dirty === "";
+  // space mutate state as a side effect of a read — and this assertion was
+  // dead until now, because the copy was taken before the flag was set.
+  r.clean = sh("git", ["status", "--porcelain"], dir).trim() === "";
+  results.push({ ...r, expect: c.expect });
 }
 
 let failed = false;
+if (warmOnly) process.exit(failedFetch ? 1 : 0);
+
 console.log("corpus                sha           files  dirs  edges  entangled  layers  tokens   ms  analyzer");
 for (const r of results) {
   console.log(
@@ -129,6 +147,9 @@ const record = process.argv.includes("--record");
 const seen = Object.fromEntries(results.map((r) => [r.corpus, {
   sha: r.sha, files: r.files, directories: r.directories, edges: r.edges,
   entangled: r.entangled, layers: r.layers, analyzer: r.analyzer,
+  // Recorded so the range the README publishes can be checked against the
+  // output that produced it, instead of drifting with every wording change.
+  orientTokens: r.orientTokens, structureTokens: r.tokens,
 }]));
 if (record) {
   writeFileSync(BASE, JSON.stringify(seen, null, 2) + "\n");

@@ -16,9 +16,24 @@
 import { existsSync, statSync, realpathSync } from "node:fs";
 import { resolve, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { inventory, history, manifests, byDirectory, testConvention, tryGit, tokens } from "./scan.mjs";
+import { inventory, history, manifests, submodulePaths, byDirectory, testConvention, tryGit, tokens, CHARS_PER_TOKEN } from "./scan.mjs";
 import { renderL0, renderL1, renderL2, renderCoChange, renderRelocations } from "./report.mjs";
 import { dependencies, renderDeps } from "./deps.mjs";
+
+// `npx skills add` copies skills/loadpath/ and nothing else, so package.json
+// does not travel with the installed skill. Without this constant an installed
+// copy cannot say what it is, and output pasted into an issue carries no
+// provenance. tests/contract.mjs holds it equal to package.json.
+const VERSION = "0.2.2";
+
+function commonAncestor(paths) {
+  if (!paths.length) return "";
+  const parts = paths.map((p) => (p ? p.split("/") : []));
+  const first = parts[0];
+  let i = 0;
+  while (i < first.length && parts.every((p) => p[i] === first[i])) i++;
+  return first.slice(0, i).join("/");
+}
 
 function parse(argv) {
   const o = { repo: ".", since: "12.months", budget: 1600, windows: 4, cap: 30, top: 12, dir: null, structure: false };
@@ -32,6 +47,7 @@ function parse(argv) {
     else if (a === "--top") o.top = Math.max(1, Number(argv[++i]) || 12);
     else if (a === "--dir") o.dir = argv[++i];
     else if (a === "--structure") o.structure = true;
+    else if (a === "--version" || a === "-V") { o.version = true; }
     else if (a === "-h" || a === "--help") { o.help = true; }
     else if (!a.startsWith("-")) rest.push(a);
   }
@@ -43,6 +59,7 @@ const HELP = `loadpath — exact facts about how a codebase carries its weight
 
   node loadpath.mjs [REPO] [options]
 
+  --version           print the version of this installed copy
   --since 12.months   history window
   --budget 1600       token budget for the structure table
   --windows 4         time windows for co-change
@@ -57,6 +74,7 @@ The tool emits leads; a finding exists after someone reads the code.`;
 
 function main() {
   const o = parse(process.argv.slice(2));
+  if (o.version) { console.log(`loadpath ${VERSION}`); return; }
   if (o.help) { console.log(HELP); return; }
 
   let root = resolve(o.repo);
@@ -84,7 +102,7 @@ function main() {
     }
   }
 
-  const files = inventory(root, prefix);
+  const files = inventory(root, prefix, submodulePaths(root));
   if (!files.length) {
     console.log(`${resolve(o.repo)}\n\nno source files found (after skipping vendored, generated and build output)`);
     return;
@@ -99,12 +117,12 @@ function main() {
     return;
   }
 
-  // An analyzer is rooted where its manifest is, not where .git is. A Go
-  // module inside a repository was previously never measured, because the
-  // scan root had already been rewritten to the git toplevel.
-  const analyzerRoot = mans.length
-    ? resolve(root, mans.map((m) => m.path).sort((a, b) => a.length - b.length)[0])
-    : resolve(root, prefix);
+  // An analyzer is rooted at the common ancestor of the manifests, not where
+  // .git is and not at whichever manifest sorts first. A module inside a
+  // repository was never measured while the root was the git toplevel; and
+  // descending to one manifest among siblings would show one project's edges
+  // and call them the repository's.
+  const analyzerRoot = resolve(root, commonAncestor(mans.map((m) => m.path)) || prefix);
   const deps = dependencies(analyzerRoot, { files });
   const depLine = deps.measured ? renderDeps(deps, { level: 0 }) : deps.line;
 
@@ -124,7 +142,11 @@ function main() {
     parts.push("");
     parts.push("structure   every directory, largest first");
     parts.push(renderL1({ dirs, hist, deps, budget: o.budget }));
-    if (deps.measured) { parts.push(""); parts.push(renderDeps(deps, { level: 1 })); }
+    // The two header lines already appeared in L0; only the detail is new.
+    if (deps.measured) {
+      const detail = renderDeps(deps, { level: 1 }).split("\n").slice(2).join("\n").trim();
+      if (detail) { parts.push(""); parts.push(detail); }
+    }
   }
 
   parts.push("");
@@ -134,7 +156,7 @@ function main() {
 
   const text = parts.join("\n");
   console.log(text);
-  console.error(`[loadpath] ~${tokens(text)} tokens (estimate: characters / 3.6)`);
+  console.error(`[loadpath] v${VERSION}  \u2264${tokens(text)} tokens (upper bound: characters / ${CHARS_PER_TOKEN}, calibrated against tiktoken on this tool's densest output)`);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) main();

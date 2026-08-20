@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -43,7 +43,16 @@ function repo() {
 }
 
 const line = (out, needle) => out.split("\n").find((l) => l.includes(needle));
+const hasGo = () => {
+  try { execFileSync("go", ["version"], { stdio: "ignore" }); return true; } catch { return false; }
+};
 const nums = (s) => (s || "").match(/-?\d[\d,]*/g)?.map((x) => Number(x.replace(/,/g, ""))) ?? [];
+// `nums` counts the 90 inside "p90" and the 90 inside "90 days". Where a field
+// has a label, read it by label.
+const field = (s, label) => {
+  const m = (s || "").match(new RegExp(`${label}\\s+(-?[\\d,]+)`));
+  return m ? Number(m[1].replace(/,/g, "")) : NaN;
+};
 
 // ── Inventory ────────────────────────────────────────────────────────────────
 
@@ -54,7 +63,7 @@ test("counts files and lines, and states the distribution", () => {
     r.file("pkg/big.go", "x\n".repeat(100));
     const out = r.run();
     assert.match(out, /^6 source files, 150 lines, 1 directories/m);
-    assert.equal(nums(line(out, "lines per file"))[0], 10, "median must be the median, not the mean");
+    assert.equal(field(line(out, "lines per file"), "median"), 10, "median must be the median, not the mean");
   } finally { r.clean(); }
 });
 
@@ -71,12 +80,14 @@ test("generated and vendored files are excluded before anything else", () => {
   } finally { r.clean(); }
 });
 
-test("a symlinked directory is not followed", () => {
+test("a symlink is not counted as a second file", () => {
   const r = repo();
   try {
-    r.file("a/one.go", "x\n");
+    r.file("a/one.go", "x\n".repeat(7));
+    execFileSync("ln", ["-s", join(r.dir, "a", "one.go"), join(r.dir, "a", "alias.go")]);
     execFileSync("ln", ["-s", join(r.dir, "a"), join(r.dir, "b")]);
-    assert.match(r.run(), /^1 source files/m);
+    const out = r.run();
+    assert.match(out, /^1 source files, 7 lines/m, "neither the aliased file nor the aliased directory is a second file");
   } finally { r.clean(); }
 });
 
@@ -164,10 +175,9 @@ test("history counts directories that still exist, never more", () => {
     r.file("gone/x.go"); r.file("stays/y.go"); r.commit("2024-01-01T00:00:00");
     rmSync(join(r.dir, "gone"), { recursive: true });
     r.file("stays/y.go", "2\n"); r.commit("2024-02-01T00:00:00");
-    const out = r.run("--since", "20.years");
-    const [active, total] = nums(line(out, "activity"));
+    const l = line(r.run("--since", "20.years"), "activity");
+    const total = Number(l.match(/of (\d+) directories/)[1]);
     assert.equal(total, 1, "a deleted directory must not inflate the count");
-    assert.ok(active <= total);
   } finally { r.clean(); }
 });
 
@@ -223,11 +233,15 @@ test("each pair carries its per-window profile and its min and max", () => {
   const r = repo(); r.init();
   try {
     for (let i = 0; i < 6; i++) { r.file("a/f.go", `${i}\n`); r.file("b/f.go", `${i}\n`); r.commit(`2020-0${i + 1}-01T00:00:00`); }
-    const row = line(r.run("--since", "20.years", "--windows", "4"), " + ");
+    const out = r.run("--since", "20.years", "--windows", "4");
+    const row = line(out, " + ");
     const prof = row.match(/\[([^\]]*)\]/);
     assert.ok(prof && /\d/.test(prof[1]), "the window profile must carry numbers");
-    assert.ok(/min \d/.test(row) && /max \d/.test(row), "an aggregate ships with its spread");
-    assert.match(r.run("--since", "20.years", "--windows", "4"), /4 equal time windows/);
+    assert.equal(prof[1].trim().split(/\s+/).length, 4, "the spread is the windows themselves");
+    // A ratio with no denominator on the page is not interpretable.
+    assert.ok(/of \d+c/.test(row), `the share needs its denominator: ${row}`);
+    assert.match(out, /4 equal time windows/);
+    assert.match(out, /"share" is/, "the unit must be stated once");
   } finally { r.clean(); }
 });
 
@@ -486,11 +500,14 @@ test("the active and dormant counts add up to the directories that exist", () =>
     r.file("stays/y.go", "2\n");
     r.commit("2024-02-01T00:00:00");
     const l = line(r.run("--since", "20.years"), "activity");
-    const m = l.match(/(\d+) of (\d+) directories touched in the last \d+ days, (\d+) not/);
+    const m = l.match(/(\d+) touched in the last \d+ days, (\d+) not, (\d+) with no commit[^—]*— of (\d+) directories/);
     assert.ok(m, `unexpected activity line: ${l}`);
-    const [active, total, dormant] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    const [active, dormant, unseen, total] = m.slice(1, 5).map(Number);
     assert.equal(total, 1, "only one directory still exists");
-    assert.equal(active + dormant, total, `active ${active} + dormant ${dormant} must equal ${total}`);
+    // Every directory must land in exactly one bucket, or the reader is shown
+    // a count that quietly omits part of the tree.
+    assert.equal(active + dormant + unseen, total,
+      `${active} + ${dormant} + ${unseen} must equal ${total}`);
   } finally { r.clean(); }
 });
 
@@ -579,7 +596,337 @@ test("an unreadable file does not enter the inventory as zero lines", () => {
     execFileSync("chmod", ["000", bad]);
     const out = r.run();
     assert.match(out, /^1 source files/m, "the unreadable file leaves the inventory");
-    assert.equal(nums(line(out, "lines per file"))[0], 10, "it must not drag the median to zero");
+    assert.equal(field(line(out, "lines per file"), "median"), 10, "it must not drag the median to zero");
     execFileSync("chmod", ["644", bad]);
+  } finally { r.clean(); }
+});
+
+// ── Guards for deletions an independent reviewer found unprotected ───────────
+
+test("p90 is a percentile, not the maximum", () => {
+  const r = repo();
+  try {
+    for (let i = 0; i < 30; i++) r.file(`p/f${i}.go`, "x\n".repeat(10));
+    r.file("p/huge.go", "x\n".repeat(1000));
+    const l = line(r.run(), "lines per file");
+    assert.equal(field(l, "max"), 1000);
+    assert.ok(field(l, "p90") < field(l, "max"), `p90 must sit below the max: ${l}`);
+    assert.equal(field(l, "median"), 10);
+  } finally { r.clean(); }
+});
+
+test("merge commits are not counted as work", () => {
+  const r = repo(); r.init();
+  try {
+    r.file("a/f.go", "1\n"); r.commit("2024-01-01T00:00:00");
+    r.git("checkout", "-q", "-b", "side");
+    r.file("b/g.go", "1\n"); r.commit("2024-02-01T00:00:00");
+    r.git("checkout", "-q", "main");
+    r.file("a/f.go", "2\n"); r.commit("2024-03-01T00:00:00");
+    execFileSync("git", ["-C", r.dir, "-c", "user.name=A", "-c", "user.email=a@e.com",
+      "-c", "commit.gpgsign=false", "merge", "--no-ff", "-q", "-m", "m", "side"],
+      { env: { ...ENV, GIT_AUTHOR_DATE: "2024-04-01T00:00:00", GIT_COMMITTER_DATE: "2024-04-01T00:00:00" }, stdio: ["ignore", "pipe", "pipe"] });
+    const n = nums(line(r.run("--since", "20.years"), "history     "))[0];
+    assert.equal(n, 3, `three commits did work; the merge did not (got ${n})`);
+  } finally { r.clean(); }
+});
+
+test("a pair below the reporting floor is not printed", () => {
+  const r = repo(); r.init();
+  try {
+    // Two directories touched together exactly twice: below the floor.
+    for (let i = 0; i < 2; i++) { r.file("a/f.go", `${i}\n`); r.file("b/f.go", `${i}\n`); r.commit(`2024-0${i + 1}-01T00:00:00`); }
+    for (let i = 0; i < 6; i++) { r.file("z/f.go", `${i}\n`); r.commit(`2024-0${i + 3}-01T00:00:00`); }
+    assert.ok(!/a \+ b/.test(r.run("--since", "20.years")), "a pair with too little support is not evidence");
+  } finally { r.clean(); }
+});
+
+test("the window is bucketed by the date --since filters on", () => {
+  const r = repo(); r.init();
+  try {
+    // A commit authored long ago but committed now — a rebase or a cherry-pick.
+    // Bucketing by author date would stretch the span to years and drop every
+    // pair into the final window.
+    r.file("a/f.go", "1\n"); r.file("b/f.go", "1\n");
+    r.git("add", "-A");
+    execFileSync("git", ["-C", r.dir, "-c", "commit.gpgsign=false", "commit", "-qm", "old"], {
+      env: { ...ENV, GIT_AUTHOR_DATE: "2016-01-01T00:00:00", GIT_COMMITTER_DATE: "2024-01-01T00:00:00" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    for (let i = 0; i < 4; i++) { r.file("a/f.go", `${i}\n`); r.file("b/f.go", `${i}\n`); r.commit(`2024-0${i + 2}-01T00:00:00`); }
+    const days = nums(line(r.run("--since", "20.years"), "history     ")).pop();
+    assert.ok(days < 400, `the span must follow the committer date, got ${days} days`);
+  } finally { r.clean(); }
+});
+
+test("the resolved cutoff is printed beside the word the user typed", () => {
+  const r = repo(); r.init();
+  try {
+    r.file("a/f.go"); r.commit("2024-01-01T00:00:00");
+    const l = line(r.run("--since", "20.years"), "history     ");
+    assert.match(l, /since \d{4}-\d{2}-\d{2} \(--since 20\.years\)/,
+      `git accepts words it resolves to something else; the date it chose must be checkable: ${l}`);
+  } finally { r.clean(); }
+});
+
+test("--dir accepts a trailing slash", () => {
+  const r = repo();
+  try {
+    r.file("keep/a.go", "x\n".repeat(5));
+    assert.match(r.run("--dir", "keep/"), /keep\/a\.go/);
+  } finally { r.clean(); }
+});
+
+test("L2 lists the largest file first", () => {
+  const r = repo();
+  try {
+    // Named so alphabetical order is the reverse of size order: a fixture where
+    // the two coincide cannot tell a sort from a walk.
+    r.file("p/a-big.go", "x\n".repeat(50)); r.file("p/m-small.go", "x\n"); r.file("p/z-mid.go", "x\n".repeat(10));
+    const rows = r.run("--dir", "p").split("\n").filter((l) => /^\s+\d+L/.test(l));
+    const order = rows.map((l) => l.trim().split(/\s+/).pop());
+    assert.deepEqual(order, ["p/a-big.go", "p/z-mid.go", "p/m-small.go"], `largest first, got: ${order.join(" ")}`);
+  } finally { r.clean(); }
+});
+
+test("a pair confined to one window says so", () => {
+  const r = repo(); r.init();
+  try {
+    for (let i = 0; i < 5; i++) { r.file("a/f.go", `${i}\n`); r.file("b/f.go", `${i}\n`); r.commit(`2020-0${i + 1}-01T00:00:00`); }
+    for (let i = 0; i < 5; i++) { r.file("z/f.go", `${i}\n`); r.commit(`2024-0${i + 1}-01T00:00:00`); }
+    const row = line(r.run("--since", "20.years"), "a + b");
+    assert.match(row, /in one window/, `a burst confined to one window is not a trend: ${row}`);
+  } finally { r.clean(); }
+});
+
+test("the manifest search descends past the repository root", () => {
+  const r = repo();
+  try {
+    r.file("services/api/package.json", '{"name":"api","version":"1.0.0"}');
+    r.file("services/api/src/index.js", "export const x = 1;\n");
+    assert.match(r.run(), /Node\s+services\/api/, "a manifest below the root must be found");
+  } finally { r.clean(); }
+});
+
+test("history stays inside the scope it was given", () => {
+  const r = repo(); r.init();
+  try {
+    r.file("sub/a/x.go"); r.file("out/b/y.go"); r.commit("2024-01-01T00:00:00");
+    for (let i = 0; i < 5; i++) { r.file("out/b/y.go", `${i}\n`); r.file("out/c/z.go", `${i}\n`); r.commit(`2024-0${i + 2}-01T00:00:00`); }
+    const out = execFileSync("node", [CLI, join(r.dir, "sub"), "--since", "20.years"], { encoding: "utf8", env: ENV, stdio: ["ignore", "pipe", "pipe"] });
+    assert.equal(nums(line(out, "history     "))[0], 1, "only commits touching the scope count");
+    assert.ok(!/out\//.test(out), "no path outside the scope may appear");
+  } finally { r.clean(); }
+});
+
+test("the layer depth is measured, not asserted", () => {
+  const r = repo();
+  try {
+    // A chain of four projects: depth must follow the chain, not a constant.
+    for (const [n, dep] of [["D", null], ["C", "D"], ["B", "C"], ["A", "B"]]) {
+      const ref = dep ? `<ItemGroup><ProjectReference Include="../${dep}/${dep}.csproj" /></ItemGroup>` : "";
+      r.file(`${n}/${n}.csproj`, `<Project>${ref}</Project>`);
+      r.file(`${n}/${n.toLowerCase()}.cs`, `class ${n} {}`);
+    }
+    const l = line(r.run(), "load path is");
+    assert.match(l, /load path is 4 layers deep/, `a four-link chain is four layers: ${l}`);
+  } finally { r.clean(); }
+});
+
+test("the csproj search descends past the first level", () => {
+  const r = repo();
+  try {
+    for (const n of ["A", "B"]) {
+      const dep = n === "A" ? '<ItemGroup><ProjectReference Include="../B/B.csproj" /></ItemGroup>' : "";
+      r.file(`src/nested/deep/${n}/${n}.csproj`, `<Project>${dep}</Project>`);
+      r.file(`src/nested/deep/${n}/${n.toLowerCase()}.cs`, `class ${n} {}`);
+    }
+    const l = line(r.run(), "dependencies");
+    assert.match(l, /ProjectReference/, `projects four levels down must still be found: ${l}`);
+  } finally { r.clean(); }
+});
+
+test("a go module is analysed without reaching the network", () => {
+  const r = repo();
+  try {
+    try { execFileSync("go", ["version"], { stdio: "ignore" }); } catch { return; }
+    r.file("go.mod", "module example.com/m\n\ngo 1.21\n");
+    r.file("alpha/a.go", 'package alpha\n\nimport _ "example.com/m/beta"\n');
+    r.file("beta/b.go", "package beta\n");
+    // An empty module cache with no proxy: a module with no external imports
+    // must still resolve, and nothing may be downloaded.
+    const cache = mkdtempSync(join(tmpdir(), "lp-gomod-"));
+    try {
+      const out = execFileSync("node", [CLI, r.dir], {
+        encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+        env: { ...ENV, GOMODCACHE: cache, GOPROXY: "https://invalid.invalid" },
+      });
+      assert.match(line(out, "dependencies"), /go list/, "an offline scan must still resolve internal edges");
+    } finally { rmSync(cache, { recursive: true, force: true }); }
+  } finally { r.clean(); }
+});
+
+test("a directory with no commit in the window is counted, not omitted", () => {
+  const r = repo(); r.init();
+  try {
+    r.file("tracked/a.go", "x\n");
+    r.commit("2024-01-01T00:00:00");
+    // Present on disk, absent from the window: it belongs in the total.
+    r.file("untracked/b.go", "x\n");
+    const l = line(r.run("--since", "20.years"), "activity");
+    const m = l.match(/(\d+) touched[^,]*, (\d+) not, (\d+) with no commit[^—]*— of (\d+) directories/);
+    assert.ok(m, `unexpected activity line: ${l}`);
+    assert.equal(Number(m[3]), 1, `the directory with no commit must be counted: ${l}`);
+    assert.equal(Number(m[4]), 2);
+  } finally { r.clean(); }
+});
+
+test("every Go module in the repository is analysed, not only the root one", { skip: !hasGo() }, () => {
+  const r = repo();
+  try {
+    r.file("go.mod", "module example.com/root\ngo 1.21\n");
+    r.file("a/x/x.go", "package x\n");
+    r.file("main.go", 'package main\nimport _ "example.com/root/a/x"\nfunc main(){}\n');
+    r.file("sub/go.mod", "module example.com/sub\ngo 1.21\n");
+    r.file("sub/b/y/y.go", "package y\n");
+    r.file("sub/s.go", 'package sub\nimport _ "example.com/sub/b/y"\n');
+    const l = line(r.run("--structure"), "dependencies");
+    // Root alone is 1 edge over 2 packages; the nested module carries the rest.
+    assert.match(l, /2 edges over 4 packages/, `the nested module must be analysed too: ${l}`);
+  } finally { r.clean(); }
+});
+
+test("a go scan reaches no network and rewrites no go.mod", { skip: !hasGo() }, () => {
+  const r = repo(); r.init();
+  try {
+    r.file("go.mod", "module example.com/root\ngo 1.21\n");
+    r.file("a/x/x.go", "package x\n");
+    r.file("main.go", 'package main\nimport _ "example.com/root/a/x"\nfunc main(){}\n');
+    r.commit("2024-01-01T00:00:00");
+    r.run("--structure");
+    const dirty = execFileSync("git", ["status", "--porcelain"], { cwd: r.dir, encoding: "utf8" });
+    assert.equal(dirty.trim(), "", `the scan must leave the tree byte-identical, got: ${dirty}`);
+  } finally { r.clean(); }
+});
+
+test("a submodule's files are not counted as this repository's code", () => {
+  const r = repo();
+  try {
+    r.file("app/main.go", "x\n".repeat(4));
+    r.file(".gitmodules", '[submodule "vendorlib"]\n\tpath = libs/vendorlib\n\turl = https://example.com/x.git\n');
+    r.file("libs/vendorlib/big.go", "x\n".repeat(900));
+    r.file("libs/vendorlib/deep/more.go", "x\n".repeat(900));
+    const out = r.run();
+    // Another repository's code borrowed into this tree is not this tree's
+    // weight, and counting it moves every distribution it appears in.
+    assert.match(out, /^1 source files, 4 lines/m, `the submodule must be excluded, got: ${line(out, "source files")}`);
+    assert.doesNotMatch(out, /vendorlib/, "no submodule path may appear as a subject of this repository");
+  } finally { r.clean(); }
+});
+
+test("compact --since spellings mean the duration, not a day of the month", () => {
+  const r = repo(); r.init();
+  try {
+    // Chronological: --since prunes the walk, so an out-of-order HEAD stops it
+    // at the first commit and the window would read empty for the wrong reason.
+    r.file("a/f.go", "1\n"); r.commit("2025-01-15T00:00:00");
+    r.file("a/f.go", "2\n"); r.commit("2026-08-01T00:00:00");
+    // git reads a bare `1y` as ~19 days ago and `30d` as a future day-of-month;
+    // both exit 0, so a wrong window would be silent rather than refused.
+    const y = line(r.run("--since", "1y"), "history");
+    assert.match(y, /1\.years/, `the rewrite must be disclosed: ${y}`);
+    assert.match(y, /since 202[56]-/, y);
+    const d = line(r.run("--since", "30d"), "history");
+    assert.doesNotMatch(d, /not measured/, `30d must not resolve into the future: ${d}`);
+    assert.match(d, /30\.days/, d);
+  } finally { r.clean(); }
+});
+
+test("an ambiguous --since unit is refused, naming both spellings", () => {
+  const r = repo(); r.init();
+  try {
+    r.file("a/f.go", "1\n"); r.commit("2026-08-01T00:00:00");
+    const l = line(r.run("--since", "3m"), "history");
+    assert.match(l, /not measured/, l);
+    assert.match(l, /3\.months/, `both readings must be named: ${l}`);
+    assert.match(l, /3\.minutes/, `both readings must be named: ${l}`);
+  } finally { r.clean(); }
+});
+
+test("a --since git already reads as a duration is passed through unchanged", () => {
+  const r = repo(); r.init();
+  try {
+    r.file("a/f.go", "1\n"); r.commit("2026-08-01T00:00:00");
+    const l = line(r.run("--since", "12.months"), "history");
+    assert.doesNotMatch(l, /→/, `nothing was rewritten, so nothing may claim to have been: ${l}`);
+  } finally { r.clean(); }
+});
+
+// The bound the tool budgets against, read from the one place it is defined.
+const CHARS_PER_TOKEN = Number(
+  /const CHARS_PER_TOKEN = ([\d.]+);/.exec(readFileSync(join(dirname(CLI), "scan.mjs"), "utf8"))?.[1]);
+const bound = (s) => Math.round(s.length / CHARS_PER_TOKEN);
+
+test("--budget is a ceiling on the structure table, not a target", () => {
+  const r = repo();
+  try {
+    for (let i = 0; i < 60; i++) r.file(`pkg/subsystem-${i}/service.go`, "x\n".repeat(20 + i));
+    for (const budget of [200, 600, 1400]) {
+      const lines = r.run("--structure", "--budget", String(budget)).split("\n");
+      const i2 = lines.findIndex((l) => l.startsWith("  files lines tests"));
+      assert.ok(i2 >= 0, "the structure table must be present");
+      let j = i2 + 1;
+      while (j < lines.length && lines[j].trim()) j++;
+      const body = lines.slice(i2 + 1, j).join("\n");
+      // The suite has no tokenizer, so it holds the tool to its own stated
+      // bound; tests/measure.mjs is where that bound meets a real one.
+      assert.ok(bound(body) <= budget, `budget ${budget} exceeded: ${bound(body)}`);
+      assert.ok(bound(body) > budget * 0.5, `budget ${budget} wasted: only ${bound(body)} used`);
+    }
+  } finally { r.clean(); }
+});
+
+test("the token bound is defined once, not copied per call site", () => {
+  assert.ok(CHARS_PER_TOKEN > 0, "scan.mjs must define CHARS_PER_TOKEN");
+  const copies = [];
+  for (const f of ["scan.mjs", "report.mjs", "loadpath.mjs", "deps.mjs"]) {
+    const src = readFileSync(join(dirname(CLI), f), "utf8");
+    for (const m of src.matchAll(/\.length\s*\/\s*(\d[\d.]*)/g)) copies.push(`${f}: /${m[1]}`);
+  }
+  // A second copy is how the estimate and the budget silently disagreed before.
+  assert.deepEqual(copies, [], `divide-by-chars must go through CHARS_PER_TOKEN, found: ${copies.join(", ")}`);
+});
+
+test("the installed copy can name its own version", () => {
+  const v = execFileSync("node", [CLI, "--version"], { encoding: "utf8" }).trim();
+  assert.match(v, /^loadpath \d+\.\d+\.\d+$/, `--version must print a version, got: ${v}`);
+  const pkg = JSON.parse(readFileSync(join(HERE, "..", "package.json"), "utf8"));
+  // package.json does not travel with `npx skills add`; the constant does.
+  assert.equal(v, `loadpath ${pkg.version}`, "the artefact and the package must agree");
+});
+
+test("an explicit future --since is refused, not reported as an empty history", () => {
+  const r = repo(); r.init();
+  try {
+    r.file("a/f.go", "1\n"); r.commit("2026-01-01T00:00:00");
+    const l = line(r.run("--since", "2099-06-01"), "history");
+    // "0 commits" would read as a quiet repository rather than a bad window.
+    assert.match(l, /future/, `a future cutoff must say so: ${l}`);
+    assert.doesNotMatch(l, /^history\s+0 commits/, l);
+  } finally { r.clean(); }
+});
+
+test("a module that fails to resolve is disclosed beside the edge count", { skip: !hasGo() }, () => {
+  const r = repo();
+  try {
+    r.file("go.mod", "module example.com/root\ngo 1.21\n");
+    r.file("a/x/x.go", "package x\n");
+    r.file("main.go", 'package main\nimport _ "example.com/root/a/x"\nfunc main(){}\n');
+    // A second module whose go.mod is unusable: the root still resolves, and a
+    // reader must not take the partial graph for the whole one.
+    r.file("broken/go.mod", "this is not a go.mod\n");
+    r.file("broken/b.go", "package broken\n");
+    const l = line(r.run("--structure"), "dependencies");
+    assert.match(l, /1 of 2 modules resolved/, `the drop must be stated: ${l}`);
   } finally { r.clean(); }
 });
