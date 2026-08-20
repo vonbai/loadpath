@@ -137,7 +137,7 @@ for (const f of readdirSync(join(ROOT, "docs", "adr"))) {
   const n = (x) => Number(String(x).replace(/,/g, ""));
   const readme = readFileSync(join(ROOT, "README.md"), "utf8");
   const pairs = [
-    ["orient", /([\d,]+)–([\d,]+) tokens across the three pinned corpora/, vals.map((v) => v.orientTokens)],
+    ["orient", /([\d,]+)–([\d,]+) tokens across the four pinned corpora/, vals.map((v) => v.orientTokens)],
     ["structure", /([\d,]+)–([\d,]+) with `--structure`/, vals.map((v) => v.structureTokens)],
   ];
   for (const [name, re, got] of pairs) {
@@ -166,6 +166,16 @@ for (const f of readdirSync(join(ROOT, "docs", "adr"))) {
   const v = /const VERSION = "([^"]+)";/.exec(cliSrc)?.[1];
   if (!v) errors.push("loadpath.mjs declares no VERSION; an installed copy cannot say what it is");
   else if (v !== pkg.version) errors.push(`loadpath.mjs is v${v} and package.json is v${pkg.version}`);
+}
+
+// 5b. The pinned install command is the primary one; a stale pin ships old bytes
+// to everyone who copies it, so the pin is held to the package version.
+{
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  const readme = readFileSync(join(ROOT, "README.md"), "utf8");
+  const pin = /skills add vonbai\/loadpath@v([\d.]+) --global/.exec(readme)?.[1];
+  if (!pin) errors.push("README publishes no pinned install command");
+  else if (pin !== pkg.version) errors.push(`README pins v${pin} and package.json is v${pkg.version}`);
 }
 
 // 6. The counts the README publishes about its own verification must be the

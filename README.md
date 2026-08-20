@@ -10,7 +10,7 @@ Loadpath 追踪真实的荷载路径。它**指向值得读的代码，不替你
 
 ## What it emits
 
-One command, 785–1,635 tokens across the three pinned corpora (36 to 1,093 source files), and 872–3,618 with `--structure`. Those are upper bounds: the divisor is calibrated with tiktoken against this tool's densest output, not a general prose ratio.
+One command, 781–1,637 tokens across the four pinned corpora (36 to 1,093 source files), and 868–3,618 with `--structure`. Those are upper bounds: the divisor is calibrated with tiktoken against this tool's densest output, not a general prose ratio.
 
 - **the distribution first** — median, p90 and max files per directory and lines per file, so every row after it is readable. `136f` means nothing until `median 7` is on the page; then it is 19× the median.
 - **scattered names** — name tokens recurring across directories, counted over distinct directories rather than files, role words refused. One subject spread across the tree, or a layer name standing where a subject name should be.
@@ -53,7 +53,7 @@ Calling a real analyzer is not the same as trusting it: the dominant failure mod
 Requires Node 18 or newer. No dependencies.
 
 ```bash
-npx --yes skills add vonbai/loadpath@v0.2.2 --global
+npx --yes skills add vonbai/loadpath@v0.3.0 --global
 ```
 
 The unpinned form, `vonbai/loadpath`, tracks `main`: every change there has passed the four suites below on a developer machine, but only a release-tagged state has run them across Node 18, 22 and 24 on Linux with a cold analyzer cache.
@@ -68,11 +68,11 @@ node ~/.agents/skills/loadpath/scripts/loadpath.mjs /path/to/repo
 
 ## Verification
 
-Everything published here is recomputed by the repository itself. These four are the gate a change passes before it lands, run locally; the same battery runs on Node 18, 22 and 24 at each release tag, which is where cross-platform behaviour and a cold analyzer cache are worth paying for.
+Everything published here is recomputed by the repository itself. There is **one gate**: `npm test` — acceptance, contract and measurement, about half a minute — and a change passes it before it lands. The deep questions (is the suite itself alive, does this hold on other platforms and Node versions, on a cold cache) are asked once per release, remotely, by the tag-triggered battery; a mutation survivor there stops the release, not your afternoon.
 
 - `node --test tests/loadpath.test.mjs` — 129 acceptance tests over synthetic repositories built per case.
 - `node tests/mutate.mjs` — 115 one-line feature deletions; **a surviving mutant fails the build.** v0.1.0's suite let 14 of 20 pass, including the line that broke its own headline claim. Three are marked *equivalent* — a second guard already produces the same observable, so they are asserted to survive and a kill means the stated proof went stale — and five are listed every run as *not exercised*, with the toolchain each would need. The number is never the claim; the list is.
-- `node tests/measure.mjs` — every published figure recomputed from three pinned public repositories and compared against `tests/measure-baseline.json`. A pin that does not resolve fails the run.
+- `node tests/measure.mjs` — every published figure recomputed from four pinned public repositories, one of them a Go+TypeScript monorepo that holds the span contract to real bytes, and compared against `tests/measure-baseline.json`. A pin that does not resolve fails the run.
 - `node tests/contract.mjs` — the skill's frontmatter, budget, pointers and vocabulary.
 
 ## Evidence

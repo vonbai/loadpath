@@ -1,6 +1,8 @@
-# Local acceptance gates every change. The four suites — tests/loadpath.test.mjs,
-# tests/contract.mjs, tests/mutate.mjs, tests/measure.mjs — are what a change
-# passes before it lands, and they are the gate. Nothing here is.
+# One local gate: `npm test` (acceptance + contract + measurement, ~30s) is
+# what a change passes before it lands. Everything heavier lives HERE and runs
+# once per release tag, remotely — the mutation check (is the suite itself
+# alive), the Node 18/22/24 matrix, the cold caches. A failure here stops the
+# release, never the development loop.
 #
 # This battery runs at the release boundary and on demand, and at no other
 # time, because mutation testing is a release blocker rather than a push

@@ -52,6 +52,23 @@ const CORPUS = [
     sha: "ec603451d07d699280234808f91c4c8d3813f6e8",
     eco: "Node",
   },
+  {
+    // Go backend + private TypeScript frontend in one tree: the polyglot shape
+    // that produced v0.2.x's self-contradiction (two declared modules, then
+    // "no analyzer applies"). This corpus holds the span contract to real
+    // bytes: two measured spans or the run fails. Its web/package.json is
+    // "private": true beside web/src, so it also pins the application-manifest
+    // keep rule. SHA read from the GitHub API on 2026-08-20, never typed.
+    name: "usememos/memos",
+    url: "https://github.com/usememos/memos.git",
+    sha: "e99ae78012f24108ea20574be6737f846b4b5ede",
+    eco: "Go+Node",
+    // Per-span expectation: the Go compiler forbids import cycles, so a Go
+    // span with an entangled group is the v0.1.0 fabrication returning. The
+    // Node side is under no such law — this corpus measures a real one-group
+    // frontend, and that figure is pinned by the baseline, not by prior belief.
+    expect: { Go: { entangled: 0 } },
+  },
 ];
 
 const sh = (cmd, args, cwd) =>
@@ -96,8 +113,8 @@ for (const c of CORPUS) {
     // The scan refuses to reach the network, so whatever each ecosystem's
     // analyzer needs is fetched here, named, and paid for once.
     try {
-      if (c.eco === "Go") sh("go", ["mod", "download"], dir);
-      else if (c.eco === "Node") sh("npx", ["--yes", MADGE, "--version"], dir);
+      if (c.eco.includes("Go")) sh("go", ["mod", "download"], dir);
+      if (c.eco.includes("Node")) sh("npx", ["--yes", MADGE, "--version"], dir);
       console.log(`  warmed  ${c.name} (${c.eco})`);
     } catch (e) {
       console.log(`  FAIL  ${c.name} could not be warmed — ${String(e.message).split("\n")[0].slice(0, 120)}`);
@@ -119,15 +136,24 @@ for (const c of CORPUS) {
   // Thousands separators too: the edge count carries them now, as every other
   // large number on the page always has, and `Number("1,710")` is NaN.
   const grab = (re) => Number((out.match(re)?.[1] ?? "-1").replace(/,/g, ""));
+  // A polyglot corpus prints one labelled block per span, and per ADR 0013
+  // their figures are never summed: a packages count plus a file-directories
+  // count is a number with no unit. So a corpus with labelled spans records a
+  // spans array and no single edges/layers/analyzer at all.
+  const spanBlocks = [...out.matchAll(
+    /^dependencies \(([^)]+)\)\s+([\d,]+) edges? over [\d,]+ [^,]+, via ([^\n]+)\n\s+load path is (\d+) layers? deep; (?:no mutually entangled group|([\d,]+) mutually entangled)/gm,
+  )].map((m) => ({ eco: m[1], edges: Number(m[2].replace(/,/g, "")), layers: Number(m[4]), entangled: m[5] ? Number(m[5].replace(/,/g, "")) : 0, analyzer: m[3] }));
   const r = {
     corpus: c.name,
     sha: c.sha.slice(0, 12),
     files: grab(/^([\d,]+) source files?,/m),
     directories: grab(/, (\d+) director(?:y|ies),/),
-    edges: grab(/dependencies\s+([\d,]+) edges?\b/),
-    entangled: /no mutually entangled group/.test(out) ? 0 : grab(/(\d+) mutually entangled group/),
-    layers: grab(/load path is (\d+) layers? deep/),
-    analyzer: out.match(/via ([^\n]+)/)?.[1] ?? "none",
+    ...(spanBlocks.length ? { spans: spanBlocks } : {
+      edges: grab(/dependencies\s+([\d,]+) edges?\b/),
+      entangled: /no mutually entangled group/.test(out) ? 0 : grab(/(\d+) mutually entangled group/),
+      layers: grab(/load path is (\d+) layers? deep/),
+      analyzer: out.match(/via ([^\n]+)/)?.[1] ?? "none",
+    }),
     tokens: tokens(out),
     orientTokens: tokens(orient),
     ms,
@@ -144,12 +170,30 @@ if (warmOnly) process.exit(failedFetch ? 1 : 0);
 
 console.log("corpus                sha           files  dirs  edges  entangled  layers  tokens   ms  analyzer");
 for (const r of results) {
-  console.log(
-    `${r.corpus.padEnd(21)} ${r.sha}  ${String(r.files).padStart(6)} ${String(r.directories).padStart(5)} ` +
-    `${String(r.edges).padStart(6)} ${String(r.entangled).padStart(10)} ${String(r.layers).padStart(7)} ` +
-    `${String(r.tokens).padStart(7)} ${String(r.ms).padStart(4)}  ${r.analyzer}`);
+  if (r.spans) {
+    console.log(`${r.corpus.padEnd(21)} ${r.sha}  ${String(r.files).padStart(6)} ${String(r.directories).padStart(5)}      —          —       — ${String(r.tokens).padStart(7)} ${String(r.ms).padStart(4)}  ${r.spans.length} spans:`);
+    for (const sp of r.spans) {
+      console.log(`${"".padEnd(21)} ${"".padEnd(12)}  ${"".padStart(6)} ${"".padStart(5)} ${String(sp.edges).padStart(6)} ${String(sp.entangled).padStart(10)} ${String(sp.layers).padStart(7)} ${"".padStart(7)} ${"".padStart(4)}  (${sp.eco}) ${sp.analyzer}`);
+    }
+  } else {
+    console.log(
+      `${r.corpus.padEnd(21)} ${r.sha}  ${String(r.files).padStart(6)} ${String(r.directories).padStart(5)} ` +
+      `${String(r.edges).padStart(6)} ${String(r.entangled).padStart(10)} ${String(r.layers).padStart(7)} ` +
+      `${String(r.tokens).padStart(7)} ${String(r.ms).padStart(4)}  ${r.analyzer}`);
+  }
   for (const [k, v] of Object.entries(r.expect ?? {})) {
-    if (r[k] !== v) { console.log(`  FAIL  ${k} is ${r[k]}, pinned expectation is ${v}`); failed = true; }
+    // An object under an ecosystem name pins that span alone; a scalar pins
+    // the whole record (or, on a spans corpus, every span).
+    if (r.spans && typeof v === "object") {
+      const sp = r.spans.find((x) => x.eco === k);
+      if (!sp) { console.log(`  FAIL  the pinned ${k} span was not measured`); failed = true; continue; }
+      for (const [f, fv] of Object.entries(v)) {
+        if (sp[f] !== fv) { console.log(`  FAIL  (${k}).${f} is ${sp[f]}, pinned expectation is ${fv}`); failed = true; }
+      }
+      continue;
+    }
+    const bad = r.spans ? r.spans.some((sp) => sp[k] !== v) : r[k] !== v;
+    if (bad) { console.log(`  FAIL  ${k} is ${r.spans ? r.spans.map((sp) => `${sp.eco}:${sp[k]}`).join(" ") : r[k]}, pinned expectation is ${v}`); failed = true; }
   }
   if (r.clean === false) { console.log(`  FAIL  the corpus working tree was modified by a scan`); failed = true; }
 }
@@ -164,8 +208,8 @@ const BASE = join(ROOT, "tests", "measure-baseline.json");
 const analyzerId = (s) => String(s).replace(/\s+\(?(?:go)?v?\d+(?:\.\d+)*\)?$/, "");
 const record = process.argv.includes("--record");
 const seen = Object.fromEntries(results.map((r) => [r.corpus, {
-  sha: r.sha, files: r.files, directories: r.directories, edges: r.edges,
-  entangled: r.entangled, layers: r.layers, analyzer: r.analyzer,
+  sha: r.sha, files: r.files, directories: r.directories,
+  ...(r.spans ? { spans: r.spans } : { edges: r.edges, entangled: r.entangled, layers: r.layers, analyzer: r.analyzer }),
   // Recorded so the range the README publishes can be checked against the
   // output that produced it, instead of drifting with every wording change.
   orientTokens: r.orientTokens, structureTokens: r.tokens,
@@ -190,6 +234,21 @@ if (record) {
       // happens to have is a fact about the machine. Pinning the version here
       // would fail the run on somebody else's Go upgrade rather than on a
       // regression, so the identity is held and the version is reported.
+      if (k === "spans") {
+        const gotSpans = got.spans ?? [];
+        for (const w of v) {
+          const g = gotSpans.find((x) => x.eco === w.eco);
+          if (!g) { console.log(`  FAIL  ${corpus}: the ${w.eco} span was not measured (the span contract broke)`); failed = true; continue; }
+          for (const f of ["edges", "entangled", "layers"]) {
+            if (g[f] !== w[f]) { console.log(`  FAIL  ${corpus} (${w.eco}).${f}: measured ${g[f]}, baseline ${w[f]}`); failed = true; }
+          }
+          if (analyzerId(g.analyzer) !== analyzerId(w.analyzer)) {
+            console.log(`  FAIL  ${corpus} (${w.eco}).analyzer: measured ${g.analyzer}, baseline ${w.analyzer}`); failed = true;
+          }
+        }
+        if (gotSpans.length !== v.length) { console.log(`  FAIL  ${corpus}: measured ${gotSpans.length} spans, baseline ${v.length}`); failed = true; }
+        continue;
+      }
       if (k === "analyzer") {
         if (analyzerId(got[k]) !== analyzerId(v)) {
           console.log(`  FAIL  ${corpus}.analyzer: measured ${got[k]}, baseline ${v}`); failed = true;

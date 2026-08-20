@@ -1,6 +1,6 @@
 {
   "name": "loadpath-skill",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": true,
   "description": "An Agent Skill that reads how a codebase carries its weight: placement, dependency direction, structural drift, and load-bearing paths.",
   "license": "MIT",
@@ -23,11 +23,9 @@
     "skills/loadpath"
   ],
   "scripts": {
-    "test": "node --test tests/loadpath.test.mjs",
+    "test": "node --test tests/loadpath.test.mjs && node tests/contract.mjs && node tests/measure.mjs",
     "mutate": "node tests/mutate.mjs",
-    "measure": "node tests/measure.mjs",
-    "contract": "node tests/contract.mjs",
-    "accept": "node --test tests/loadpath.test.mjs && node tests/contract.mjs && node tests/mutate.mjs && node tests/measure.mjs"
+    "release-battery": "node --test tests/loadpath.test.mjs && node tests/contract.mjs && node tests/mutate.mjs && node tests/measure.mjs"
   },
   "engines": {
     "node": ">=18"

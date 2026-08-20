@@ -24,7 +24,7 @@ Three consequences hold in every use:
 ## Run it
 
 ```
-node scripts/loadpath.mjs [REPO]                orient — 785–1,635 tokens measured
+node scripts/loadpath.mjs [REPO]                orient — 781–1,637 tokens measured
 node scripts/loadpath.mjs [REPO] --structure    every directory, plus entangled groups
 node scripts/loadpath.mjs [REPO] --dir PATH     one subtree, file by file, with the load
                                                 crossing its line and each file's last touch

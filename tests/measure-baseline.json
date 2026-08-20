@@ -7,8 +7,8 @@
     "entangled": 0,
     "layers": 2,
     "analyzer": "go list -e -mod=readonly (go1.26.4)",
-    "orientTokens": 785,
-    "structureTokens": 872
+    "orientTokens": 781,
+    "structureTokens": 868
   },
   "cli/cli": {
     "sha": "95d3a1db45ab",
@@ -18,8 +18,8 @@
     "entangled": 0,
     "layers": 14,
     "analyzer": "go list -e -mod=readonly (go1.26.4)",
-    "orientTokens": 1482,
-    "structureTokens": 3185
+    "orientTokens": 1478,
+    "structureTokens": 3181
   },
   "sverweij/dependency-cruiser": {
     "sha": "ec603451d07d",
@@ -29,7 +29,30 @@
     "entangled": 3,
     "layers": 3,
     "analyzer": "madge 8.0.0",
-    "orientTokens": 1635,
+    "orientTokens": 1631,
+    "structureTokens": 3614
+  },
+  "usememos/memos": {
+    "sha": "e99ae78012f2",
+    "files": 858,
+    "directories": 105,
+    "spans": [
+      {
+        "eco": "Go",
+        "edges": 122,
+        "layers": 9,
+        "entangled": 0,
+        "analyzer": "go list -e -mod=readonly (go1.26.4)"
+      },
+      {
+        "eco": "Node",
+        "edges": 323,
+        "layers": 3,
+        "entangled": 1,
+        "analyzer": "madge 8.0.0"
+      }
+    ],
+    "orientTokens": 1637,
     "structureTokens": 3618
   }
 }

@@ -138,7 +138,7 @@ const MUTANTS = [
   ["the orient view loses its dependency line", `${S}/report.mjs`,
     'out.push(renderDeps(spans));', "void 0;"],
   ["the installed copy cannot name its version", `${S}/loadpath.mjs`,
-    'const VERSION = "0.2.2";', 'const VERSION = "0.0.0";'],
+    'const VERSION = "0.3.0";', 'const VERSION = "0.0.0";'],
   ["only the root Go module is analysed", `${S}/deps.mjs`,
     "const mods = goModules(root);", "const mods = [root];"],
   ["a partial module resolution is not disclosed", `${S}/deps.mjs`,
