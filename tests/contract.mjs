@@ -53,3 +53,79 @@ for (const need of ["references/canon.md", "references/language-conventions.md",
 
 if (errors.length) { console.log("FAIL"); errors.forEach((e) => console.log(`  - ${e}`)); process.exit(1); }
 console.log(`OK  SKILL.md ${lines} lines, ~${Math.round(tok)} tokens, pointers resolve, vocabulary clean`);
+
+// ── Documentation consistency ────────────────────────────────────────────────
+//
+// The manual review that produced this section found DESIGN.md naming two
+// Python files that had been replaced by four JavaScript ones, canon.md citing
+// a script that no longer existed, and docs/evidence.md describing the
+// withdrawn substring method as though it were the shipped one. Each was a
+// single-source-of-truth violation of the kind DESIGN.md forbids, and each
+// would have drifted back. These checks are the loop closing.
+
+import { readdirSync, statSync } from "node:fs";
+
+const mds = [];
+(function walk(d) {
+  for (const e of readdirSync(d, { withFileTypes: true })) {
+    if (e.name.startsWith(".") || e.name === "node_modules") continue;
+    const p = join(d, e.name);
+    if (e.isDirectory()) walk(p);
+    else if (e.name.endsWith(".md")) mds.push(p);
+  }
+})(ROOT);
+
+// 1. Every script or reference a document names must exist.
+for (const md of mds) {
+  const body = readFileSync(md, "utf8");
+  for (const m of body.matchAll(/`(scripts\/[\w.-]+|references\/[\w.-]+)`/g)) {
+    if (!existsSync(join(S, m[1]))) {
+      errors.push(`${md.slice(ROOT.length + 1)} names ${m[1]}, which does not exist`);
+    }
+  }
+}
+
+// 2. Terminology recorded as falsified must not read as current. It may appear
+//    only in the documents whose subject is that failure.
+const FALSIFIED = {
+  "sound over-approximation": "a formal claim the measurement could not fund",
+  "no cycle here": "false outside Go; the contract it named does not hold",
+};
+const MAY_RECORD_FAILURE = ["docs/adr/0006-withdraw-v0-1-0.md", "docs/research/findings.md"];
+for (const md of mds) {
+  const rel = md.slice(ROOT.length + 1);
+  if (MAY_RECORD_FAILURE.includes(rel)) continue;
+  const body = readFileSync(md, "utf8").toLowerCase();
+  for (const [term, why] of Object.entries(FALSIFIED)) {
+    if (body.includes(term)) errors.push(`${rel} uses "${term}" — ${why}`);
+  }
+}
+
+// 3. A decision recorded as fact must be implemented, or say that it is not.
+const scripts = readdirSync(join(S, "scripts")).map((f) => readFileSync(join(S, "scripts", f), "utf8")).join("\n");
+const ADR_EVIDENCE = {
+  "0002": /the quarantine/,          // inference quarantined by file
+  "0003": /go list|grimp|madge|ProjectReference/,
+  "0005": /export function tarjan\b/,
+  "0009": /"--name-status"/,
+  "0011": /e\.topShare = shares\[0\]/,
+  "0012": /min \$\{lo/,
+};
+for (const f of readdirSync(join(ROOT, "docs", "adr"))) {
+  const n = f.slice(0, 4);
+  const body = readFileSync(join(ROOT, "docs", "adr", f), "utf8");
+  const declared = /\*\*Status:\*\*[^\n]*not yet implemented/.test(body);
+  const evidence = ADR_EVIDENCE[n];
+  if (evidence && !evidence.test(scripts) && !declared) {
+    errors.push(`ADR ${n} reads as implemented and the code does not show it`);
+  }
+}
+
+// 4. Every flag SKILL.md teaches must exist in the CLI.
+const cli = readFileSync(join(S, "scripts", "loadpath.mjs"), "utf8");
+for (const m of new Set([...text.matchAll(/`(--[a-z]+)[^`]*`/g)].map((x) => x[1]))) {
+  if (!cli.includes(`"${m}"`)) errors.push(`SKILL.md teaches ${m}, which the CLI does not accept`);
+}
+
+if (errors.length) { console.log("FAIL"); errors.forEach((e) => console.log(`  - ${e}`)); process.exit(1); }
+console.log(`   documents consistent: ${mds.length} markdown files, pointers resolve, no withdrawn terminology, ADRs match the code`);

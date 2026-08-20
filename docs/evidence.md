@@ -1,50 +1,73 @@
 # Evidence
 
-What each measurement rests on, what was rejected, and what nothing supports. `skills/loadpath/references/canon.md` carries the design canon; this file carries the empirical trail.
+What each measurement rests on, what was rejected, and what nothing supports. `skills/loadpath/references/canon.md` carries the design canon; this file carries the empirical trail. `docs/research/findings.md` carries the full research record behind both.
 
-## Dependency detection
+Every figure below is recomputed by `tests/measure.mjs` from pinned public commits, or is stated with the corpus it came from.
 
-**Method.** Directed edges between directories are found by looking for one directory's path inside another's non-test source. Every real import contains the path it imports, so the method is a sound over-approximation. Parent/child pairs are excluded — a parent's path is a prefix of its child's and would otherwise register as a dependency.
+## Dependency edges
 
-**Validation.** Measured against `go list -deps=false -json ./...` ground truth on a 1281-file, 93-directory Go repository:
+**Method.** No parsing and no guessing. `scripts/deps.mjs` runs the ecosystem's own analyzer, names it in the output, and reports **Not measured** where none applies.
 
-| Variant | Edges | Precision | Recall |
-|---|---|---|---|
-| All files, all lines | 614 | 68.1% | 100% |
-| Import-shaped lines only | 612 | 68.3% | 100% |
-| **Test files excluded** | **443** | **94.4%** | **100%** |
-| Test files excluded + import-shaped lines | 442 | 94.6% | 100% |
+| Ecosystem | Analyzer | Granularity |
+|---|---|---|
+| Go | `go list -e -mod=readonly -json ./...` | package = directory |
+| C# | `.csproj` `<ProjectReference>` | project |
+| Python | `grimp` | module directory |
+| Node/TS | `madge --extensions --ts-config` | file directory |
 
-Two findings decided the implementation. Test files were the entire source of the false positives; restricting to import-shaped lines added 0.2 points and was dropped as complexity that buys nothing. And recall stayed at 100% throughout, which is the load-bearing half: **absence of a cycle is trustworthy, presence of one wants a glance.**
+**Verified.** On a 1,281-file Go module, `go list` plus iterative Tarjan returns **93 packages, 418 internal edges, 0 strongly connected components** — matching `go list` ground truth exactly, with `git status` byte-identical before and after.
 
-**Not built.** Enforcement. Every mature rule enforcer is language-bound — `dependency-cruiser` (JS/TS), `import-linter` (Python), `go-arch-lint` (Go), `ArchUnit` (JVM), `ArchUnitNET` (.NET) — and most take a machine-readable rule file an agent can author and diff. Reimplementing that in a heuristic would be strictly worse than routing to it. The reasoning is language-agnostic; the enforcement is not.
+**Why not parse.** Substring matching of directory paths was tried, published, and withdrawn. It measured 94.3% precision at one repository root and **43.5% one directory down**, where short names like `io`, `db` and `work` match ordinary English prose in comments. Recall was worse: on standard TypeScript and Python layouts it returned nothing at all on textbook cycles, because relative imports and dotted package names never contain a repo-relative directory path. On the one Go module it was validated against it reported **fourteen cycles where the compiler makes cycles impossible**.
 
-## Co-change weighting
+Per-language import regexes recover recall but cannot resolve aliases, re-exports or dynamic imports. For Python the gap is closable by no parser at all: `from x import y` leaves `y` ambiguous between a module and an attribute, so a parser must emit both — 7,644 edges against grimp's 3,061 on one real corpus. Only the module table settles it.
 
-Four arXiv papers, read in isolation, decided the shape of the co-change score.
+**Why an analyzer is still not trusted.** The dominant failure mode of the Node tools is silent empty output rather than an error: `madge` returns `{}` without `--extensions`, and `dependency-cruiser` returns `modules: []` against current TypeScript. Every analyzer result therefore passes a sanity check — edges present, node count plausible against the file count — and a failed check reports Not measured, never zero.
 
-**Grade evidence per event; never count it.** *Many-Objective Software Remodularization using NSGA-III* (arXiv:2005.06510v1) sums per-event weights from an operation-compatibility table so irrelevant history contributes exactly zero rather than diluting a score. `scan.py` applies the same shape: each commit casts one vote split across the pairs it implies, so a wide tangled commit cannot mint a dense clique, and an all-additions commit is damped further as creation rather than coupling. The paper's own machinery does not transfer — eight hours of optimization, call graphs, Java-specific refactoring recovery — and the authors concede the history objective is separable.
+**Read-only is not automatic.** Three analyzers in this space mutate state as a side effect: `cargo metadata` writes `Cargo.lock` and reaches the registry, `GOFLAGS=-mod=mod` rewrites `go.mod` and reaches the network, `dotnet package list` auto-restores on .NET 10+. `-mod=readonly` is passed explicitly, and `tests/measure.mjs` asserts the corpus working tree is unchanged after a scan.
 
-**Normalize, then read the rate of change.** *Understanding Architecture Erosion* (arXiv:2103.11392v1) reports practitioners tracking architectural smell *density* across releases rather than absolute counts, because code size shifts underneath the comparison. `scan.py` buckets weighted votes into time windows for the same reason, reporting `rising`, `steady`, `at-creation`, or `fading`.
+## Graph structure
 
-**Drift needs a referent.** *Tackling Software Architecture Erosion* (arXiv:2104.13919v1) defines erosion as inconsistency between a declared architecture and its implementation, and makes amending a stale declaration a first-class outcome rather than a retreat. It is a two-page position paper with no implementation or evaluation — framing, not evidence.
+**Components, not cycles.** Enumerating cycles of length two and three had a **56% false-negative rate on cycle membership** on a real graph, and the miss rate rose with tangle size — degrading exactly where it matters. Length two and three are not a category; they are an artifact of how many loops were typed. Tarjan is O(V+E) and reports the set: *these N directories are one module wearing N names.* The iterative formulation is required — recursive Tarjan raises at around 1,500 nodes, and real repositories exceed that.
 
-**Name findings from a grounded vocabulary.** *Warnings: Violation Symptoms Indicating Architecture Erosion* (arXiv:2212.12168v2) hand-labelled 606 genuine violation symptoms out of 21,583 keyword hits. Structural inconsistency is the largest category at 205, and the one module-boundary advice concerns.
+**Layer depth is free.** Steward's design-structure-matrix partitioning is exactly SCC condensation followed by a topological order, so the layer count comes out of the same pass. It answers what a cycle list cannot: how far weight travels before it reaches something that depends on nothing.
+
+## Co-change
+
+Four arXiv papers, read in isolation, decided its shape.
+
+**Grade evidence per event; never count it.** *Many-Objective Software Remodularization using NSGA-III* (arXiv:2005.06510v1) sums per-event weights so irrelevant history contributes exactly zero rather than diluting a score. `scan.mjs` applies the same shape: each commit casts one vote split across the pairs it implies, so a wide commit cannot mint a dense clique, and an all-additions commit is damped further as creation rather than coupling.
+
+**Normalise, then read the rate of change.** *Understanding Architecture Erosion* (arXiv:2103.11392v1) reports practitioners tracking smell *density* across releases rather than absolute counts, because code size shifts underneath the comparison. Weighted votes are bucketed into time windows for the same reason, and the window count is printed as the parameter it is.
+
+**Cap the breadth, and say so.** At breadth 100 a pair's share of one vote is 2×10⁻⁴, so 2,475 such commits would be needed to reach the reporting floor. Capping at 30 preserved a top-15 ranking exactly while cutting a third of the pair operations. The excluded count is disclosed: they are sweeps, not coupling.
+
+**An average alone is not reportable.** On identical predictions a model reached an expected calibration error of 2–3% — which looks excellent — while its maximum hit 99–100%, because opposing regions cancel in the mean. Each pair therefore carries its per-window profile and its min–max.
 
 ### Rejected after reading
 
-**Commit message text as a signal.** arXiv:2212.12168v2 proposes matching a violation vocabulary against commit messages. Declined on two independent grounds: arXiv:2103.11392v1 dropped GitHub as a data source because under 0.1% of Issue and Commit hits were erosion-related, so erosion is essentially never *named* in commit history; and the proposing paper's own corpus is code review prose rather than commit messages, with no per-source precision reported and roughly 97% false positives on raw keyword matching before human labelling.
+**Commit message text as a signal.** arXiv:2212.12168v2 proposes matching a violation vocabulary against commit messages. Declined on two independent grounds: arXiv:2103.11392v1 dropped GitHub as a data source because under 0.1% of Issue and Commit hits were erosion-related, so erosion is essentially never *named* in history; and the proposing paper's corpus is code review prose with roughly 97% false positives on raw keyword matching before human labelling.
 
-**A single composite score.** arXiv:2005.06510v1 reports that scoring many objectives at once produces a large set of mutually equivalent answers with no principled way to choose among them. arXiv:2104.13919v1 separately cites evidence that refactoring can make established metrics look worse. Two independent axes that agree is evidence; several axes averaged is noise.
+**A single composite score.** Scoring many objectives at once produces a large set of mutually equivalent answers with no principled way to choose among them, and refactoring can make established metrics look worse. Two independent axes that agree is evidence; several averaged is noise.
+
+**Community detection.** Twenty Louvain seeds produced twenty distinct partitions with modularity spread across 0.233–0.262, and the resolution limit — roughly √(2m), which was 30.7 edges on the measured graph — sits an order of magnitude above the three-edge module this tool reasons about. See `docs/adr/0007`.
+
+## Commit-share concentration
+
+In a defect model over 25 releases of 7 systems against 59 confounders and 54 static product metrics, the top author's share of commits to a file took the **first** importance rank group and the count of authors above a 5% share the second — above every static size and complexity metric. Blame-derived line ownership ranked sixth and was explicitly called weakly associated, which together with its cost (3.4 s per 200 files) rules `git blame` out twice over.
+
+The raw commit count is that metric's ingredient, not the metric. Both are printed, because the ratio is undefined exactly where activity is absent.
 
 ## The caveat that outranks every measurement
 
-arXiv:2103.11392v1's cause taxonomy finds a large share of architecture erosion causes are non-technical — turnover, knowledge vaporization, schedule pressure, communication failure. These leave a co-change fingerprint indistinguishable from genuine design coupling while implying that no boundary should move.
+A large share of architecture erosion causes are non-technical — turnover, knowledge vaporisation, schedule pressure, communication failure. These leave a fingerprint indistinguishable from genuine design coupling while implying that no boundary should move.
 
 No score licenses a refactor. It licenses a question.
 
 ## What nothing supports
 
-- **No source validates that directory-level co-change tracks architecture erosion.** The practitioner study explicitly declines the causal claim.
-- **No source supplies a threshold, a precision figure, or a window length** for these signals. Every constant in `scan.py` — 20 files, 3 shared tokens, 800 lines, 2:1, 4 windows — is tunable convention, not a principled value, and should be read that way.
-- **No source describes how a language-agnostic, directory-level intended architecture should be expressed.** A declared referent would make drift measurable rather than inferable; the format has no prior art to copy.
+- **No source validates that directory-level co-change tracks erosion.** The practitioner study explicitly declines the causal claim. Co-change stays on the Common Closure Principle — a design argument, not a predictive one — and the output says so in those words.
+- **Test-file counts were evaluated by no retained paper** as a predictor of anything.
+- **Every retained result is per-file or per-commit.** Nothing licenses aggregating them to a directory, which is the unit this tool emits. Directory rollups inherit no authority from this evidence.
+- **No source supplies a threshold, a precision figure, or a window length.** Every constant in `scan.mjs` — 20 files, 800 lines, 4 windows, a breadth cap of 30, a 5% author share — is tunable convention, not a principled value.
+- **No retained paper measured whether any presentation reduces over-trust** in a reader. The presentation rules here rest on evidence about what figures hide, not on measured reader behaviour.
+- **No study establishes that a table is read more reliably than JSON.** The token cost is measured — JSON runs about 2× a table for the same content — and the comprehension advantage is reasoning from mechanism, stated as such.

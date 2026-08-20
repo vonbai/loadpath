@@ -69,9 +69,9 @@ Four modules, three seams. The arrangement exists to contain one specific failur
 
 ### Structure expresses it
 
-Two files. `scripts/scan.py` holds Inventory, History, Report, and the CLI — everything exact. `scripts/deps.py` holds the quarantine — everything inexact.
+`scripts/scan.mjs` holds Inventory and History, `scripts/report.mjs` holds Report, `scripts/loadpath.mjs` is the entry point — everything exact. `scripts/deps.mjs` holds the quarantine — everything inexact.
 
-The file boundary *is* the exact/inferred seam, visible from a directory listing without reading code. A single file would leave the modules as function groupings, which is a shallow expression of the design; five files would be structure created ahead of a second caller, which this skill's own placement rule forbids.
+The file boundary *is* the exact/inferred seam, visible from a directory listing without reading code. Measurement and rendering are separated for the second reason the seams section gives: in v0.1.0 nothing that computed was stopped from printing, so truncation went undisclosed and one claim came to live in four files. A single file would leave all four modules as function groupings, which is a shallow expression of the design.
 
 ### Facts, not verdicts
 
