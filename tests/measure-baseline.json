@@ -1,0 +1,29 @@
+{
+  "spf13/cobra": {
+    "sha": "adbc8813901b",
+    "files": 36,
+    "directories": 2,
+    "edges": 1,
+    "entangled": 0,
+    "layers": 2,
+    "analyzer": "go list -e -mod=readonly"
+  },
+  "cli/cli": {
+    "sha": "95d3a1db45ab",
+    "files": 896,
+    "directories": 308,
+    "edges": 1710,
+    "entangled": 0,
+    "layers": 14,
+    "analyzer": "go list -e -mod=readonly"
+  },
+  "sverweij/dependency-cruiser": {
+    "sha": "ec603451d07d",
+    "files": 1093,
+    "directories": 329,
+    "edges": 40,
+    "entangled": 3,
+    "layers": 3,
+    "analyzer": "madge"
+  }
+}

@@ -91,7 +91,7 @@ function main() {
   }
   const conv = testConvention(files);
   const dirs = byDirectory(files, conv.isTest);
-  const hist = history(root, { since: o.since, windows: o.windows, breadthCap: o.cap });
+  const hist = history(root, { since: o.since, windows: o.windows, breadthCap: o.cap, prefix });
   const mans = manifests(root).filter((m) => !prefix || m.path.startsWith(prefix));
 
   if (o.dir) {
@@ -99,7 +99,13 @@ function main() {
     return;
   }
 
-  const deps = dependencies(root, { files });
+  // An analyzer is rooted where its manifest is, not where .git is. A Go
+  // module inside a repository was previously never measured, because the
+  // scan root had already been rewritten to the git toplevel.
+  const analyzerRoot = mans.length
+    ? resolve(root, mans.map((m) => m.path).sort((a, b) => a.length - b.length)[0])
+    : resolve(root, prefix);
+  const deps = dependencies(analyzerRoot, { files });
   const depLine = deps.measured ? renderDeps(deps, { level: 0 }) : deps.line;
 
   const parts = [];
@@ -117,7 +123,7 @@ function main() {
   if (o.structure) {
     parts.push("");
     parts.push("structure   every directory, largest first");
-    parts.push(renderL1({ dirs, hist, budget: o.budget }));
+    parts.push(renderL1({ dirs, hist, deps, budget: o.budget }));
     if (deps.measured) { parts.push(""); parts.push(renderDeps(deps, { level: 1 })); }
   }
 

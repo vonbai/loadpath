@@ -68,6 +68,12 @@ export function renderL0({ files, dirs, conv, hist, mans, deps, root, since, win
   const med = median(fileCounts) || 1;
   const ranked = [...dirs.values()].sort((a, b) => b.files / med - a.files / med).slice(0, 5);
   out.push("");
+  // With a flat distribution every ratio is 1 and the sort is a no-op, so the
+  // rows would be insertion order presented as outliers.
+  if (!ranked.length || ranked[0].files <= med) {
+    out.push(`no directory departs from those norms; the distribution is flat`);
+    return out.join("\n");
+  }
   out.push(`furthest from this repository's own norms`);
   for (const d of ranked) {
     const h = hist.available ? hist.dirs.get(d.path) : null;
@@ -83,26 +89,32 @@ export function renderL0({ files, dirs, conv, hist, mans, deps, root, since, win
 // 3,154-directory repository. Budget is met by binary search over how many
 // rows survive, after Aider's repo map, rather than a hardcoded top-N.
 
-export function renderL1({ dirs, hist, budget }) {
+export function renderL1({ dirs, hist, deps, budget }) {
   const rows = [...dirs.values()].map((d) => {
     const h = hist.available ? hist.dirs.get(d.path) : null;
+    const grp = deps && deps.measured && deps.layerOf.has(d.path)
+      ? { layer: deps.layerOf.get(d.path), group: deps.groupOf.get(d.path) } : null;
     return {
       path: d.path || ".",
       mass: d.lines,
       cells: [
         `${d.files}f`,
         `${num(d.lines)}L`,
-        d.tests ? `${d.tests}t` : "",
-        h ? `${h.commits}c` : "",
-        h ? `${Math.round(h.topShare * 100)}%/${h.majorAuthors}a` : "",
-        h ? day(h.last) : "",
+        d.tests ? `${d.tests}t` : "-",
+        // A blank cell under a "commits" header reads as zero. Where history
+        // is unavailable the column says so once, in the header, and every
+        // cell carries the same mark rather than an absence.
+        hist.available ? (h ? `${h.commits}c` : "0c") : "?",
+        hist.available ? (h ? `${Math.round(h.topShare * 100)}%/${h.majorAuthors}a` : "-") : "?",
+        hist.available ? (h ? day(h.last) : "-") : "?",
+        grp ? `L${grp.layer}${grp.group ? " g" + grp.group : ""}` : "",
       ],
     };
   }).sort((a, b) => b.mass - a.mass);
 
   const draw = (n) => {
     const keep = rows.slice(0, n);
-    const w = [0, 0, 0, 0, 0, 0];
+    const w = [0, 0, 0, 0, 0, 0, 0];
     for (const r of keep) r.cells.forEach((c, i) => (w[i] = Math.max(w[i], c.length)));
     const lines = keep.map((r) =>
       "  " + r.cells.map((c, i) => c.padStart(w[i])).join(" ") + "  " + r.path);
@@ -121,7 +133,9 @@ export function renderL1({ dirs, hist, budget }) {
     const s = draw(mid);
     if (s.length / 3.6 <= budget) { best = s; lo = mid + 1; } else hi = mid - 1;
   }
-  const head = "  files lines tests commits share/authors last-touched  directory";
+  const head = hist.available
+    ? "  files lines tests commits share/authors last-touched layer  directory"
+    : "  files lines tests   (? = history not measured)                  directory";
   return [head, best].join("\n");
 }
 
@@ -157,7 +171,8 @@ export function renderCoChange(hist, top) {
 // ── Relocations ──────────────────────────────────────────────────────────────
 
 export function renderRelocations(hist) {
-  if (!hist.available || !hist.relocations.length) return null;
+  if (!hist.available) return `relocations  not measured — ${hist.reason}`;
+  if (!hist.relocations.length) return `relocations  none — no directory has moved 3 or more files in this window`;
   const out = [`relocations  what this repository has already moved`];
   for (const r of hist.relocations.slice(0, 8)) {
     out.push(`  ${day(r.at)}  ${r.n.toString().padStart(4)} files   ${r.from} → ${r.to}`);

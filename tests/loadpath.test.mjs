@@ -180,10 +180,13 @@ test("commit share is the top author's fraction, beside the count", () => {
     r.commit("2024-01-01T00:00:00", "Ann");
     for (let i = 0; i < 3; i++) { r.file("p/f0.go", `${i}\n`); r.commit(`2024-0${i + 2}-01T00:00:00`, "Ann"); }
     r.file("p/f0.go", "z\n"); r.commit("2024-06-01T00:00:00", "Bob");
-    const row = line(r.run("--since", "20.years"), "top author");
-    const share = Number(row.match(/top author (\d+)%/)[1]);
+    // One directory has no deviation from a median it defines, so the share
+    // is read from the structure table rather than the outlier section.
+    const row = r.run("--since", "20.years", "--structure").split("\n").find((l) => /%\/\d+a/.test(l));
+    assert.ok(row, "the structure table must carry the share");
+    const share = Number(row.match(/(\d+)%\//)[1]);
     assert.ok(share >= 75 && share < 85, `4 of 5 commits by one author is 80%, got ${share}%`);
-    assert.ok(/of 5c/.test(row), "the raw count must stay beside the ratio");
+    assert.ok(/\b5c\b/.test(row), "the raw count must stay beside the ratio");
   } finally { r.clean(); }
 });
 
@@ -263,7 +266,7 @@ test("a rename inside one directory is not a relocation", () => {
     r.commit("2024-01-01T00:00:00");
     for (let i = 0; i < 5; i++) r.git("mv", `p/f${i}.go`, `p/g${i}.go`);
     r.commit("2024-02-01T00:00:00");
-    assert.ok(!/relocations/.test(r.run("--since", "20.years")));
+    assert.ok(!/→/.test(r.run("--since", "20.years")), "no directory moved");
   } finally { r.clean(); }
 });
 
@@ -316,7 +319,13 @@ test("scanning a subdirectory keeps every path repository-relative", () => {
     r.commit("2024-01-01T00:00:00");
     const out = execFileSync("node", [CLI, join(r.dir, "sub"), "--since", "20.years"], { encoding: "utf8", env: ENV, stdio: ["ignore", "pipe", "pipe"] });
     assert.match(out, /paths are repository-relative/);
-    assert.ok(/sub\/a/.test(out), "paths must carry the scope prefix");
+    // The leak the scope note promised not to have: history and dependencies
+    // must be scoped too, or the reader is shown directories the tool said it
+    // was not scanning.
+    assert.ok(!/other\/b/.test(out), `a directory outside the scope leaked in:\n${out}`);
+    assert.match(out, /^1 source files/m, "only the scoped subtree is counted");
+    const h = line(out, "history     ");
+    assert.ok(/1 commits/.test(h), `history must be scoped too, got: ${h}`);
   } finally { r.clean(); }
 });
 
@@ -497,4 +506,80 @@ test("a repository reached through a symlinked path is still scanned", () => {
     assert.match(out, /^1 source files/m, "a symlinked path must resolve to the same repository, not to a subdirectory of it");
     assert.ok(!/paths are repository-relative/.test(out), "the repository root reached by a symlink is still the root");
   } finally { rmSync(link, { force: true }); r.clean(); }
+});
+
+test("a graph covering a sliver of the tree is not measured", () => {
+  const r = repo();
+  try {
+    // Three trivial C# projects among sixty directories: an analyzer runs and
+    // resolves a real graph, but it covers too little to read as the tree's.
+    for (let i = 0; i < 60; i++) r.file(`spread/d${i}/f${i}.cs`, "class X {}");
+    for (const n of ["A", "B", "C"]) {
+      r.file(`${n}/${n}.csproj`, '<Project><ItemGroup><ProjectReference Include="../A/A.csproj" /></ItemGroup></Project>');
+      r.file(`${n}/${n.toLowerCase()}.cs`, `class ${n} {}`);
+    }
+    const l = line(r.run(), "dependencies");
+    assert.match(l, /not measured/, `a sliver graph must not read as measured: ${l}`);
+    assert.ok(/%\)/.test(l), "the coverage it did reach must be stated");
+  } finally { r.clean(); }
+});
+
+test("an acyclic result is scoped to what the analyzer saw, not to the tree", () => {
+  const r = repo();
+  try {
+    try { execFileSync("go", ["version"], { stdio: "ignore" }); } catch { return; }
+    r.file("go.mod", "module example.com/m\n\ngo 1.21\n");
+    r.file("alpha/a.go", 'package alpha\n\nimport _ "example.com/m/beta"\n');
+    r.file("beta/b.go", "package beta\n");
+    const out = r.run("--structure");
+    assert.ok(!/graph is acyclic/.test(out), "a clean verdict must not come from the inexact module");
+    assert.match(out, /no group found in the \d+ packages/, "say what was searched, not what is true");
+  } finally { r.clean(); }
+});
+
+test("history unavailable renders as a mark, never as a blank under a count header", () => {
+  const r = repo();
+  try {
+    for (let i = 0; i < 4; i++) r.file(`p${i}/a.go`, "x\n");
+    const out = r.run("--structure");
+    assert.match(out, /history not measured/, "the header must say the column is unmeasured");
+    const row = out.split("\n").find((l) => /\bp0$/.test(l));
+    assert.ok(row && /\?/.test(row), `a cell must carry a mark, not a blank: ${row}`);
+  } finally { r.clean(); }
+});
+
+test("a flat distribution says so instead of presenting insertion order as outliers", () => {
+  const r = repo();
+  try {
+    for (let i = 0; i < 20; i++) r.file(`d${i}/f.go`, "x\n");
+    const out = r.run();
+    assert.match(out, /the distribution is flat/);
+    assert.ok(!/furthest from/.test(out), "there is nothing furthest when everything is equal");
+  } finally { r.clean(); }
+});
+
+test("a module in a subdirectory is measured, wherever .git sits", () => {
+  const r = repo(); r.init();
+  try {
+    try { execFileSync("go", ["version"], { stdio: "ignore" }); } catch { return; }
+    r.file("svc/go.mod", "module example.com/svc\n\ngo 1.21\n");
+    r.file("svc/alpha/a.go", 'package alpha\n\nimport _ "example.com/svc/beta"\n');
+    r.file("svc/beta/b.go", "package beta\n");
+    r.commit("2024-01-01T00:00:00");
+    const l = line(r.run("--since", "20.years"), "dependencies");
+    assert.match(l, /go list/, `a nested module must still be analysed: ${l}`);
+  } finally { r.clean(); }
+});
+
+test("an unreadable file does not enter the inventory as zero lines", () => {
+  const r = repo();
+  try {
+    r.file("p/good.go", "x\n".repeat(10));
+    const bad = r.file("p/bad.go", "x\n".repeat(10));
+    execFileSync("chmod", ["000", bad]);
+    const out = r.run();
+    assert.match(out, /^1 source files/m, "the unreadable file leaves the inventory");
+    assert.equal(nums(line(out, "lines per file"))[0], 10, "it must not drag the median to zero");
+    execFileSync("chmod", ["644", bad]);
+  } finally { r.clean(); }
 });

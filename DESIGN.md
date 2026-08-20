@@ -34,7 +34,7 @@ Three rules follow, and they are not negotiable:
 
 ## Constraints that decide implementation
 
-- **Enforcement is language-specific even when reasoning is not.** Route to `dependency-cruiser`, `import-linter`, `go-arch-lint`, `ArchUnit`. Reimplementing them in a heuristic is strictly worse.
+- **Analysis is language-specific even when reasoning is not.** Route to the ecosystem's own analyzer — `go list`, `grimp`, `madge`, `.csproj` XML — and reimplement none of them. Enforcement tools such as `go-arch-lint` and `ArchUnit` are where a project takes a rule it wants checked; this skill has no rule format and does not call them.
 - **Performance is not the constraint.** A full scan of a 1281-file repository runs in 136 ms; ripgrep would make it 26 ms. Nothing may be added for speed. A dependency must buy *accuracy* or it does not enter.
 - **A claim ships with its reproduction or it does not ship.** v0.1.0's headline precision figure was measured on a private repository at an unrecorded commit with a harness that exists nowhere — and it described code that had since changed. Either the corpus is public and pinned and the harness is in the repo, or the number states its own unreproducibility.
 - **The test suite must kill feature deletions.** v0.1.0's suite let 14 of 20 one-line feature deletions pass, including the line that broke its own recall claim. Mutation survival is a release blocker, not a metric.
@@ -77,7 +77,7 @@ The file boundary *is* the exact/inferred seam, visible from a directory listing
 
 The tool emits measurements and the agent judges them. v0.1.0's verdicts were wrong three times — its cycles were fabricated, its `rising` label inverted on constant coupling, its god-file threshold was unsourced — while the underlying figures were never wrong. A line count, a commit count, and a per-window profile are facts. "God file", "rising", and "this is a cycle" are judgements, and they belong to the reader.
 
-Progressive disclosure carries this: the default output orients at directory level for roughly 2k tokens on a 1400-file repository, drill-downs are requested by name, and the footer signposts what can be asked next. Withholding a fact is not disclosure; pre-digesting it into a verdict is not either.
+Progressive disclosure carries this: the default output orients at directory level, drill-downs are requested by name, and the footer signposts what can be asked next. Its measured cost is recorded once, in `tests/measure-baseline.json`, and nowhere else. Withholding a fact is not disclosure; pre-digesting it into a verdict is not either.
 
 ## Progressive disclosure, per module
 
@@ -85,25 +85,27 @@ Disclosure is an algorithm, not a flag. Each module discloses in three layers, a
 
 | | L0 — orient | L1 — structure | L2 — detail |
 |---|---|---|---|
-| **Inventory** | robust distribution summary plus deviation ranking, O(F log F) | adaptive tree rollup by greedy top-down budget split, O(V log V) | file level for one named subtree, O(F_subtree) |
-| **History** | age, commit count, active/dormant split, O(C) | weighted co-change with breadth cap and time windows, O(Σ min(k,cap)²) | per-directory churn |
-| **Dependency** | which analyzer ran, layers deep, entangled group count, NCCD — or Not measured, O(V+E) | DSM layer table with entangled groups and their anchors, O(V+E) | edge list and back edges |
+| **Inventory** | robust distribution summary plus deviation ranking, O(F log F) | flat table ordered by mass, binary-searched to a token budget, O(V log V) | file level for one named subtree, O(F_subtree) |
+| **History** | age, commit count, active/dormant split, O(C) | weighted co-change with breadth cap and time windows, O(Σ min(k,cap)²) | not built |
+| **Dependency** | which analyzer ran, layers deep, entangled group count — or Not measured, O(V+E) | entangled groups with their anchors, and each directory's layer and group carried on its own row, O(V+E) | not built; an edge list would contradict the rule above it |
 
-**L0 is the norms and the outliers. L1 is the structure. L2 is the detail.** The L0 algorithm is the same in every module: summarise the distribution, then rank by deviation from it.
+**L0 is the norms and the outliers. L1 is the structure. L2 is the detail.** Inventory's L0 summarises a distribution and ranks by deviation from it; History's and Dependency's L0 report totals and could do the same, which is the clearest unclaimed improvement in the tool.
 
 ### Why the distribution comes first
 
 `cmd/cotx 56f` is uninterpretable alone. `files per directory: median 7, p90 32, max 136` makes every later row readable, and turns `136f` into *19× the median* — which is a fact about the distribution, checkable and exact, not a verdict. One line buys the meaning of every line after it.
 
-Measured: an 18-line L0 costs about 164 tokens on a 1281-file repository and carries the file and line totals, tree depth, language mix, test ratio, both distributions, repository age, the active-versus-dormant split, the modules declared by manifests, and the four directories furthest from the repository's own norms. It also answers which analyzer to run, because the manifest names the ecosystem.
+L0 is around twenty lines and carries the file and line totals, tree depth, language mix, test ratio, both distributions, repository age, the active-versus-dormant split, the modules declared by manifests, and the four directories furthest from the repository's own norms. It also answers which analyzer to run, because the manifest names the ecosystem.
 
-### Why the tree rollup must adapt
+### Why the structure table must meet a budget
 
-A flat directory table does not scale. Measured on a 3154-directory repository it is about 14,000 tokens — the same failure as the per-file table it replaced. The greedy budget split gives each subtree an allowance proportional to its mass and collapses any subtree that cannot afford a line into its parent's `+N more`. Measured at one budget: 141 directories render in 16 lines, 3154 in 31. The summary scales with the repository's shape rather than its size.
+A flat directory table does not scale: on a 3,154-directory repository it runs to about 14,000 tokens, the same failure as the per-file table it replaced.
+
+What ships is a flat list ordered by mass, truncated by **binary search over how many rows survive** until the rendering fits the budget — Aider's repo map approach, and a departure from the recursive tree rollup this document once specified. The tree rollup was prototyped and not built: it gives each subtree an allowance and collapses the rest into a per-parent `+N more`, which reads better on a deep tree, and it is recorded here as the shape to revisit if depth ever becomes the problem. The shipped table scales with the budget rather than with the repository, and states once how many directories it did not show.
 
 ## What the agent actually receives
 
-A skill's markdown is paid once, when it triggers. A script's output is paid on **every invocation**, and no budget constrains it. Measured on a 1281-file repository: the description costs 165 tokens per turn, SKILL.md 2,818 tokens once, and one scan 3,335 tokens each time it runs.
+A skill's markdown is paid once, when it triggers. A script's output is paid on **every invocation**, and no budget constrains it. The description costs about 95 tokens per turn and SKILL.md about 2,060 once, against a scan that costs several hundred to a few thousand every time it runs — the figures live in `tests/measure-baseline.json`.
 
 **The output budget is therefore the primary design constraint, and SKILL.md's length is the secondary one.** The published 500-line guidance governs the markdown; nothing governs the thing that actually dominates.
 
@@ -119,7 +121,7 @@ The division of labour follows: **the tool traverses, the agent judges.** Traver
 
 ### The shape that survives serialisation
 
-A sorted table of self-contained rows, each directory a feature vector — files, lines, tests, commits, age, reach, layer, group.
+A sorted table of self-contained rows, each directory a feature vector — files, lines, tests, commits, commit share, last touched, layer and group. Transitive reach and a normalised cumulative dependency figure belong here and are not built; both are one pass over a graph the tool already holds.
 
 - **No cross-line joins.** Each row is readable alone, because the norms are stated once at the top.
 - **Order carries meaning.** Rows are ranked by deviation from those norms, so the agent does not have to sort — something it can do but not reliably across many rows.
@@ -137,7 +139,7 @@ The skill must be able to say which way to move without inventing an architectur
 |---|---|
 | Dependencies should run one way; a cycle is a fact with known costs | whether `billing` and `settlement` belong apart |
 | Things that change together belong together, and it is measurable | what this domain's subjects are |
-| Transitive reach should fall; NCCD toward 1 | which architectural style to adopt |
+| Transitive reach should fall toward a hierarchy | which architectural style to adopt |
 | Load-bearing paths do not move | what the target architecture is |
 | A migration separates prepare, coexist, migrate, cut over, stabilize, remove | |
 

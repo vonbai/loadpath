@@ -6,10 +6,10 @@
 // unrecorded commit with a harness that existed nowhere, and which described
 // code that had already changed. This file exists so that cannot recur.
 //
-//   node tests/measure.mjs            clone the corpus if needed, then measure
-//   node tests/measure.mjs --check    fail if a measurement moved
+//   node tests/measure.mjs            measure, and compare against the baseline
+//   node tests/measure.mjs --record   rewrite the baseline from this run
 
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -23,19 +23,30 @@ const CORPUS = [
   {
     name: "spf13/cobra",
     url: "https://github.com/spf13/cobra.git",
-    sha: "e94f6d0dd9a5e5738dca6bce03c4b1207ffbc0ec",
+    sha: "adbc8813901bba65827259daa8e22ff94ec1f30e",
     eco: "Go",
     // Go forbids import cycles, so a correct analyzer must report zero groups
     // on any module that compiles. This is the check v0.1.0 would have failed.
     expect: { entangled: 0 },
   },
   {
+    // Large, Go, long history: the corpus that exercises the scale claims a
+    // 36-file repository cannot. Every SHA here was read from the GitHub API,
+    // never typed — the previous entry carried a SHA that did not resolve to
+    // any object, and `optional: true` hid it. That is the v0.1.0 failure
+    // reproduced inside the harness written to prevent it.
     name: "cli/cli",
     url: "https://github.com/cli/cli.git",
-    sha: "9b8b8c8b1f1f8e5c0e2b1c4e9d3a7f6b2c5d8e1a",
+    sha: "95d3a1db45abd547c2dafbee4f8a68ca53fb9c80",
     eco: "Go",
     expect: { entangled: 0 },
-    optional: true,   // large; skipped when unreachable
+  },
+  {
+    // TypeScript, so the Node path is exercised rather than only asserted.
+    name: "sverweij/dependency-cruiser",
+    url: "https://github.com/sverweij/dependency-cruiser.git",
+    sha: "ec603451d07d699280234808f91c4c8d3813f6e8",
+    eco: "Node",
   },
 ];
 
@@ -60,10 +71,17 @@ function fetchCorpus(c) {
 }
 
 const results = [];
+let failedFetch = false;
 for (const c of CORPUS) {
   let dir;
   try { dir = fetchCorpus(c); }
-  catch (e) { console.error(`skipped ${c.name}: ${String(e.message).split("\n")[0]}`); continue; }
+  catch (e) {
+    // A pin that does not resolve is the defect this file exists to prevent,
+    // so it fails the run rather than printing "skipped" and moving on.
+    console.log(`  FAIL  ${c.name} @ ${c.sha.slice(0, 12)} did not fetch — ${String(e.message).split("\n")[0].slice(0, 120)}`);
+    failedFetch = true;
+    continue;
+  }
 
   const t0 = Date.now();
   const out = sh("node", [CLI, dir, "--since", "20.years", "--structure"], ROOT);
@@ -103,6 +121,29 @@ for (const r of results) {
   if (r.clean === false) { console.log(`  FAIL  the corpus working tree was modified by a scan`); failed = true; }
 }
 
-if (!results.length) { console.log("\nno corpus reachable; nothing measured"); process.exit(0); }
-console.log(`\nEvery figure above is recomputed from the pinned commits by this file.`);
+if (!results.length) { console.log("\nno corpus reachable; nothing was measured, so nothing is verified"); process.exit(1); }
+if (failedFetch) process.exit(1);
+// Compare against the recorded baseline, so a figure cannot move unnoticed.
+const BASE = join(ROOT, "tests", "measure-baseline.json");
+const record = process.argv.includes("--record");
+const seen = Object.fromEntries(results.map((r) => [r.corpus, {
+  sha: r.sha, files: r.files, directories: r.directories, edges: r.edges,
+  entangled: r.entangled, layers: r.layers, analyzer: r.analyzer,
+}]));
+if (record) {
+  writeFileSync(BASE, JSON.stringify(seen, null, 2) + "\n");
+  console.log(`\nbaseline recorded for ${Object.keys(seen).length} corpora`);
+} else if (existsSync(BASE)) {
+  const base = JSON.parse(readFileSync(BASE, "utf8"));
+  for (const [corpus, want] of Object.entries(base)) {
+    const got = seen[corpus];
+    if (!got) { console.log(`  FAIL  ${corpus} is in the baseline and was not measured`); failed = true; continue; }
+    for (const [k, v] of Object.entries(want)) {
+      if (got[k] !== v) { console.log(`  FAIL  ${corpus}.${k}: measured ${got[k]}, baseline ${v}`); failed = true; }
+    }
+  }
+  if (!failed) console.log(`\nEvery figure matches tests/measure-baseline.json, recomputed from the pinned commits.`);
+} else {
+  console.log(`\nno baseline yet — run with --record once the figures are trusted`);
+}
 if (failed) process.exit(1);

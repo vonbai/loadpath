@@ -11,7 +11,7 @@ Loadpath 追踪真实的荷载路径。它**指向值得读的代码，不替你
 
 ## What it emits
 
-One command, about 900 tokens on a 1,300-file repository:
+One command, 545–1,056 tokens across the three pinned corpora (36 to 1,093 source files), and 666–2,977 with `--structure`:
 
 - **the distribution first** — median, p90 and max files per directory and lines per file, so every row after it is readable. `136f` means nothing until `median 7` is on the page; then it is 19× the median.
 - **activity** — what was touched recently, and what was not. A directory with no recent commits is *unmeasured*, not known to be safe.
@@ -68,9 +68,9 @@ node ~/.agents/skills/loadpath/scripts/loadpath.mjs /path/to/repo
 
 Everything published here is recomputed by the repository itself.
 
-- `node --test tests/loadpath.test.mjs` — 35 acceptance tests over synthetic repositories built per case.
+- `node --test tests/loadpath.test.mjs` — 41 acceptance tests over synthetic repositories built per case.
 - `node tests/mutate.mjs` — 26 one-line feature deletions; **a surviving mutant fails the build.** v0.1.0's suite let 14 of 20 pass, including the line that broke its own headline claim.
-- `node tests/measure.mjs` — published figures recomputed from pinned public commits, with the corpus and SHA in the file.
+- `node tests/measure.mjs` — every published figure recomputed from three pinned public repositories and compared against `tests/measure-baseline.json`. A pin that does not resolve fails the run.
 - `node tests/contract.mjs` — the skill's frontmatter, budget, pointers and vocabulary.
 
 ## Evidence

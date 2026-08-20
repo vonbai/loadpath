@@ -24,7 +24,7 @@ Three consequences hold in every use:
 ## Run it
 
 ```
-node scripts/loadpath.mjs [REPO]              orient — about 900 tokens
+node scripts/loadpath.mjs [REPO]              orient — a few hundred to ~1k tokens
 node scripts/loadpath.mjs [REPO] --structure  every directory, plus entangled groups
 node scripts/loadpath.mjs [REPO] --dir PATH   one subtree, file by file
 ```

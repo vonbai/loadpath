@@ -5,7 +5,7 @@
 // Nothing here infers. Inference lives in deps.mjs, alone, so that a reader can
 // tell a number's trustworthiness from which file produced it.
 //
-//   node scan.mjs [REPO] [--since 12.months] [--budget 2000] [--dir PATH] [--json]
+// Entry point is loadpath.mjs; this file is a module, not a command.
 //
 // The tool emits leads. A finding exists after someone reads the code a lead
 // points at. See DESIGN.md.
@@ -105,6 +105,7 @@ function tryGit(root, args, opts) {
 
 function inventory(root, prefix = "") {
   const files = [];
+  const unreadable = [];
   const walk = (abs) => {
     let entries;
     try { entries = readdirSync(abs, { withFileTypes: true }); }
@@ -121,11 +122,13 @@ function inventory(root, prefix = "") {
       if (!SOURCE_EXT.has(extname(e.name))) continue;
       if (GENERATED_PATH.some((re) => re.test(rel))) continue;
       const m = measure(p);
+      if (m.unreadable) { unreadable.push(rel); continue; }
       if (m.generated) continue;
       files.push({ path: rel, dir: dirname(rel) === "." ? "" : dirname(rel), ...m });
     }
   };
   walk(root);
+  files.unreadable = unreadable;
   return files;
 }
 
@@ -133,8 +136,10 @@ function inventory(root, prefix = "") {
 const BUF = Buffer.allocUnsafe(1 << 16);
 function measure(abs) {
   let fd;
-  try { fd = openSync(abs, "r"); } catch { return { lines: 0, bytes: 0, generated: false }; }
-  let lines = 0, bytes = 0, first = "", binary = false, n;
+  // A file that cannot be read is not a file of zero lines. It leaves the
+  // inventory rather than entering every total, median and percentile as 0.
+  try { fd = openSync(abs, "r"); } catch { return { unreadable: true }; }
+  let lines = 0, bytes = 0, first = "", binary = false, partial = false, n;
   try {
     while ((n = readSync(fd, BUF, 0, BUF.length, null)) > 0) {
       if (bytes === 0) first = BUF.subarray(0, Math.min(n, 400)).toString("utf8");
@@ -145,8 +150,9 @@ function measure(abs) {
       }
       bytes += n;
     }
-  } catch { /* unreadable mid-stream: keep what was counted */ }
+  } catch { partial = true; }
   finally { closeSync(fd); }
+  if (partial) return { unreadable: true };   // a partial count is not an exact one
   return { lines, bytes, binary, generated: GENERATED_HEAD.test(first) };
 }
 
@@ -178,7 +184,7 @@ function byDirectory(files, isTest) {
 // C-quotes any path holding a non-ASCII byte, a quote, a tab or a newline, and
 // such a path parses its own extension wrongly and vanishes.
 
-function history(root, { since, windows, breadthCap }) {
+function history(root, { since, windows, breadthCap, prefix = "" }) {
   const shallow = tryGit(root, ["rev-parse", "--is-shallow-repository"]);
   if (shallow.ok && shallow.out.trim() === "true") {
     return { available: false, reason: "shallow clone — every file reads as added, so history figures would be fabricated. Re-clone without --depth." };
@@ -219,15 +225,16 @@ function history(root, { since, windows, breadthCap }) {
     commits.push(cur);
     const body = nl < 0 ? "" : chunk.slice(nl + 1);
     const fields = body.split("\0").filter(Boolean);
+    const inScope = (p) => !prefix || p === prefix || p.startsWith(prefix + "/");
     for (let i = 0; i < fields.length; i++) {
       const st = fields[i];
       if (!/^[A-Z]\d*$/.test(st)) continue;
       if (st[0] === "R" || st[0] === "C") {
         const from = fields[++i], to = fields[++i];
         if (from && to) {
-          if (SOURCE_EXT.has(extname(to))) cur.paths.push(to);
+          if (SOURCE_EXT.has(extname(to)) && inScope(to)) cur.paths.push(to);
           cur.edits++;
-          const move = commonMove(from, to);
+          const move = inScope(from) || inScope(to) ? commonMove(from, to) : null;
           if (move) {
             const k = `${move[0]} ${move[1]}`;
             const r = relocations.get(k) || { from: move[0], to: move[1], n: 0, at: cur.at };
@@ -237,7 +244,7 @@ function history(root, { since, windows, breadthCap }) {
       } else {
         const p = fields[++i];
         if (!p) continue;
-        if (SOURCE_EXT.has(extname(p))) cur.paths.push(p);
+        if (SOURCE_EXT.has(extname(p)) && inScope(p)) cur.paths.push(p);
         if (st[0] === "A") cur.adds++; else cur.edits++;
       }
     }
