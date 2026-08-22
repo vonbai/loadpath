@@ -94,8 +94,23 @@ test("counts files and lines, and states the distribution", () => {
     for (let i = 0; i < 5; i++) r.file(`pkg/f${i}.go`, "x\n".repeat(10));
     r.file("pkg/big.go", "x\n".repeat(100));
     const out = r.run();
-    assert.match(out, /^6 source files, 150 lines, 1 directory/m);
+    assert.match(out, /^6 source files, 150 lines, 1 source-containing directory, max source-path depth 1$/m);
     assert.equal(field(line(out, "lines per file"), "median"), 10, "median must be the median, not the mean");
+  } finally { r.clean(); }
+});
+
+test("directory totals name the source population and physical depth exactly", () => {
+  const r = repo();
+  try {
+    r.file("src/ledger/posting.go", "x\n");
+    r.file("docs/guide.md", "not in the source population\n");
+    r.file("ops/release.sh", "not in the source population\n");
+    const out = r.run("--structure");
+    assert.match(out, /^1 source file, 1 line, 1 source-containing directory, max source-path depth 2$/m, out);
+    assert.match(out, /structure {3}every source-containing directory, largest first/, out);
+    assert.match(out, /source-containing directory/, out);
+    assert.doesNotMatch(out, /^\s+.*(?:docs|ops)(?:\/|$)/m,
+      `container-only and unsupported-file directories are outside this table's population:\n${out}`);
   } finally { r.clean(); }
 });
 
@@ -142,13 +157,13 @@ test("Java- and C#-style test names are recognised, not counted as implementatio
 
 // ── Size ranking ─────────────────────────────────────────────────────────────
 
-test("ranks the largest directories first, and prints each against the median", () => {
+test("ranks the largest source-containing directories first, and prints each against the median", () => {
   const r = repo();
   try {
     for (let d = 0; d < 5; d++) for (let i = 0; i < 2; i++) r.file(`small${d}/f${i}.go`);
     for (let i = 0; i < 20; i++) r.file(`wide/f${i}.go`);
     const out = r.run();
-    const first = out.split("largest directories")[1].split("\n")[1];
+    const first = out.split("largest source-containing directories")[1].split("\n")[1];
     assert.ok(first.includes("wide"), `the largest must rank first, got: ${first}`);
     assert.ok(/10×\s*median/.test(first), `must print the ratio against the median, got: ${first}`);
   } finally { r.clean(); }
@@ -160,7 +175,7 @@ test("the ranking claims size, because size is what it sorts by", () => {
     for (let d = 0; d < 5; d++) for (let i = 0; i < 2; i++) r.file(`small${d}/f${i}.go`);
     for (let i = 0; i < 20; i++) r.file(`wide/f${i}.go`);
     const out = r.run();
-    assert.ok(line(out, "largest directories"), `the section must name what it computes:\n${out}`);
+    assert.ok(line(out, "largest source-containing directories"), `the section must name what it computes:\n${out}`);
     // files/median is monotone in files: dividing every row by one constant
     // cannot reorder them, so a heading promising the directories furthest
     // from this repository's norms promised a deviation nothing computed.
@@ -223,7 +238,7 @@ test("history counts directories that still exist, never more", () => {
     rmSync(join(r.dir, "gone"), { recursive: true });
     r.file("stays/y.go", "2\n"); r.commit("2024-02-01T00:00:00");
     const l = line(r.run("--since", "20.years"), "activity");
-    const total = Number(l.match(/of (\d+) director/)[1]);
+    const total = Number(l.match(/of (\d+) source-containing director/)[1]);
     assert.equal(total, 1, "a deleted directory must not inflate the count");
   } finally { r.clean(); }
 });
@@ -592,7 +607,7 @@ test("the structure table honours its budget", () => {
     const small = r.run("--structure", "--budget", "300");
     const large = r.run("--structure", "--budget", "3000");
     assert.ok(small.length < large.length, "a smaller budget must produce less");
-    assert.match(small, /directories not shown/);
+    assert.match(small, /source-containing directories not shown/);
   } finally { r.clean(); }
 });
 
@@ -609,7 +624,7 @@ test("no width of table fits the budget, and the smallest one is drawn anyway", 
     const table = renderL1({ dirs, hist: { available: false }, spans: [], budget: 5 });
     const rows = table.split("\n").filter((l) => /^\s+\d+f\b/.test(l));
     assert.equal(rows.length, 1, `the smallest table there is, got ${rows.length} rows:\n${table}`);
-    assert.match(table, /\+39 directories not shown/, "and it still says what it did not show");
+    assert.match(table, /\+39 source-containing directories not shown/, "and it still says what it did not show");
   } finally { r.clean(); }
 });
 
@@ -759,7 +774,7 @@ test("the active and dormant counts add up to the directories that exist", () =>
     r.file("stays/y.go", "2\n");
     r.commit("2024-02-01T00:00:00");
     const l = line(r.run("--since", "20.years"), "activity");
-    const m = l.match(/(\d+) touched in the last \d+ days?, (\d+) not, (\d+) with no commit[^—]*— of (\d+) director/);
+    const m = l.match(/(\d+) touched in the last \d+ days?, (\d+) not, (\d+) with no commit[^—]*— of (\d+) source-containing director/);
     assert.ok(m, `unexpected activity line: ${l}`);
     const [active, dormant, unseen, total] = m.slice(1, 5).map(Number);
     assert.equal(total, 1, "only one directory still exists");
@@ -835,7 +850,7 @@ test("a flat distribution says so instead of presenting insertion order as outli
     for (let i = 0; i < 20; i++) r.file(`d${i}/f.go`, "x\n");
     const out = r.run();
     assert.match(out, /the distribution is flat/);
-    assert.ok(!/largest directories/.test(out), "nothing is largest when everything is equal");
+    assert.ok(!/largest source-containing directories/.test(out), "nothing is largest when everything is equal");
   } finally { r.clean(); }
 });
 
@@ -1012,8 +1027,11 @@ test("the layer depth is measured, not asserted", () => {
       r.file(`${n}/${n}.csproj`, `<Project>${ref}</Project>`);
       r.file(`${n}/${n.toLowerCase()}.cs`, `class ${n} {}`);
     }
-    const l = line(r.run(), "load path is");
+    const out = r.run();
+    const l = line(out, "load path is");
+    assert.match(out, /max source-path depth 1/, `physical depth must carry its own unit:\n${out}`);
     assert.match(l, /load path is 4 layers deep/, `a four-link chain is four layers: ${l}`);
+    assert.doesNotMatch(out, /, \d+ deep$/m, `bare depth must not conflate the physical tree with dependency layers:\n${out}`);
   } finally { r.clean(); }
 });
 
@@ -1099,7 +1117,7 @@ test("a directory with no commit in the window is counted, not omitted", () => {
     // Present on disk, absent from the window: it belongs in the total.
     r.file("untracked/b.go", "x\n");
     const l = line(r.run("--since", "20.years"), "activity");
-    const m = l.match(/(\d+) touched[^,]*, (\d+) not, (\d+) with no commit[^—]*— of (\d+) director/);
+    const m = l.match(/(\d+) touched[^,]*, (\d+) not, (\d+) with no commit[^—]*— of (\d+) source-containing director/);
     assert.ok(m, `unexpected activity line: ${l}`);
     assert.equal(Number(m[3]), 1, `the directory with no commit must be counted: ${l}`);
     assert.equal(Number(m[4]), 2);
@@ -1539,12 +1557,17 @@ test("an ecosystem this tool ships no analyzer for is named, not omitted", () =>
   } finally { r.clean(); }
 });
 
-test("the quarantine measures and does not format", () => {
+test("source access and rendering stay on opposite sides of the seam", () => {
   const deps = readFileSync(join(dirname(CLI), "deps.mjs"), "utf8");
-  // DESIGN.md, "Measure ↔ render": nothing computes and prints in the same
-  // place. v0.1.0's truncation went undisclosed because something did.
+  const report = readFileSync(join(dirname(CLI), "report.mjs"), "utf8");
+  // DESIGN.md, "Acquire ↔ render": source modules acquire facts; Report may
+  // derive a view from supplied facts, but it may not open the repository,
+  // invoke git, or invoke an analyzer itself.
   for (const idiom of ["padStart(", "padEnd(", "console.log("]) {
     assert.ok(!deps.includes(idiom), `deps.mjs lays out output with ${idiom}; that belongs to report.mjs`);
+  }
+  for (const source of ['"node:fs"', '"node:child_process"']) {
+    assert.ok(!report.includes(source), `report.mjs imports ${source}; source access belongs before the render seam`);
   }
 });
 
@@ -1623,7 +1646,7 @@ test("a name token spread across directories is reported with both counts", () =
     const l = line(r.run(), "scattered names");
     // Both counts, because eleven files across nine directories and eleven
     // across three are different findings with different fixes.
-    assert.match(l, /handler ×11 across 9 directories/, l);
+    assert.match(l, /handler ×11 across 9 source-containing directories/, l);
   } finally { r.clean(); }
 });
 
@@ -1637,7 +1660,7 @@ test("stoplisted, short and numeric tokens do not scatter", () => {
       r.file(`${d}/x_2024.go`, "x\n");       // a bare number is a date or a version
     }
     const l = line(r.run(), "scattered names");
-    assert.match(l, /none recur across 3 or more directories/, l);
+    assert.match(l, /none recur across 3 or more source-containing directories/, l);
   } finally { r.clean(); }
 });
 
@@ -1650,7 +1673,7 @@ test("camelCase names split into tokens, so one subject spread thin is visible",
     // Read whole, these are three names that recur nowhere; read as words,
     // they are one role standing in three places.
     const out = r.run();
-    assert.match(line(out, "scattered names"), /names\s+handler ×3 across 3 directories/, out);
+    assert.match(line(out, "scattered names"), /names\s+handler ×3 across 3 source-containing directories/, out);
   } finally { r.clean(); }
 });
 
@@ -1663,7 +1686,7 @@ test("a repository with no recurring token says so instead of dropping the line"
     const l = line(r.run(), "scattered names");
     // A section that vanishes when it finds nothing cannot be told from one
     // that was never computed.
-    assert.match(l, /none recur across 3 or more directories/, l);
+    assert.match(l, /none recur across 3 or more source-containing directories/, l);
   } finally { r.clean(); }
 });
 
@@ -1692,7 +1715,7 @@ test("a snapshot taken and compared against an unchanged tree reports no structu
     assert.match(out, /no structural change against the snapshot/, out);
     // The delta and nothing else: the reader has already seen the view the
     // snapshot came from.
-    assert.ok(!/files per directory/.test(out), `the normal view must not be reprinted:\n${out}`);
+    assert.ok(!/files per source-containing directory/.test(out), `the normal view must not be reprinted:\n${out}`);
     assert.ok(!/dependencies {2}\d/.test(out), `nor the span line it opens with:\n${out}`);
     assert.match(out, /lag by design/, `and what history cannot answer is said every time:\n${out}`);
   } finally { rmSync(f, { force: true }); r.clean(); }
@@ -1744,6 +1767,7 @@ test("compare names the directories that appeared and went, and says how many it
     const app = line(out, "appeared"), gone = line(out, "gone");
     assert.match(app ?? "", /8 appeared/, out);
     assert.match(gone ?? "", /8 gone/, out);
+    assert.match(line(out, "appeared") ?? "", /^source-containing directories\s+8 appeared/, out);
     // A capped list that stops without saying so is a truncation the reader
     // cannot see.
     assert.match(app, /\+3 more/, app);
@@ -1921,12 +1945,12 @@ test("the test-convention list says how many conventions it did not name", () =>
   } finally { r.clean(); }
 });
 
-test("the largest-directories list says how many directories it did not rank", () => {
+test("the largest-directories list says how many source-containing directories it did not rank", () => {
   const r = repo();
   try {
     for (let i = 0; i < 20; i++) r.file(`d${i}/f.go`, "x\n");
     for (let i = 0; i < 9; i++) r.file(`wide/f${i}.go`, "x\n");
-    assert.match(r.run(), /\+16 more directories, all smaller/, "five of twenty-one, and the list stopped without saying so");
+    assert.match(r.run(), /\+16 more source-containing directories, all smaller/, "five of twenty-one, and the list stopped without saying so");
   } finally { r.clean(); }
 });
 
@@ -1974,10 +1998,10 @@ test("the structure header says when the budget trimmed the table", () => {
   const r = repo();
   try {
     for (let i = 0; i < 200; i++) r.file(`d${i}/f.go`, "x\n".repeat(i + 1));
-    assert.match(r.run("--structure", "--budget", "300"), /every directory the budget admits, largest first/,
+    assert.match(r.run("--structure", "--budget", "300"), /every source-containing directory the budget admits, largest first/,
       "the promise was printed above a table that had already dropped most of the tree");
     const big = r.run("--structure", "--budget", "20000");
-    assert.match(big, /structure {3}every directory, largest first/, big);
+    assert.match(big, /structure {3}every source-containing directory, largest first/, big);
     assert.ok(!/the budget admits/.test(big), "nothing was trimmed, so nothing may say it was");
   } finally { r.clean(); }
 });
@@ -2034,7 +2058,7 @@ test("a single-author repository states it once and drops the share column", () 
     r.commit("2024-01-01T00:00:00", "Ann");
     for (let i = 0; i < 3; i++) { r.file("p0/f.go", `${i}\n`); r.commit(`2024-0${i + 2}-01T00:00:00`, "Ann"); }
     const out = r.run("--since", "20.years", "--structure");
-    assert.match(out, /one author holds every directory's commits/, out);
+    assert.match(out, /one author holds every source-containing directory's commits/, out);
     assert.ok(!/%\/\d+a/.test(out), `the column was the same two figures on every row:\n${out}`);
     const header = out.split("\n").find((l) => /^ {2}files\b/.test(l));
     assert.ok(header && !/share/.test(header), `and the header may not name a column that is not there: ${header}`);
@@ -2048,7 +2072,7 @@ test("a repository with more than one author keeps the share column", () => {
     r.file("p/f.go", "1\n"); r.commit("2024-02-01T00:00:00", "Bob");
     const out = r.run("--since", "20.years", "--structure");
     assert.ok(/%\/\d+a/.test(out), `a share that varies is a figure, not noise:\n${out}`);
-    assert.ok(!/one author holds every directory/.test(out), out);
+    assert.ok(!/one author holds every source-containing directory/.test(out), out);
   } finally { r.clean(); }
 });
 
@@ -2065,7 +2089,7 @@ test("the structure header sits over the columns it names", () => {
     // each name must end where the figure under it ends — the fixed header
     // string named one column while standing over another on every table.
     const ends = (l) => [...l.matchAll(/\S+/g)].map((m) => m.index + m[0].length);
-    const head = ends(lines[i]).slice(0, -1);            // every column but "directory"
+    const head = ends(lines[i]).slice(0, -2);            // every column but "source-containing directory"
     assert.deepEqual(ends(lines[i + 1]).slice(0, head.length), head,
       `header\n${lines[i]}\nrow\n${lines[i + 1]}`);
   } finally { r.clean(); }
@@ -2079,7 +2103,7 @@ test("a count of one takes a singular noun", () => {
     for (const wrong of ["1 source files", "1 lines", "1 directories", "1 commits", "1 days", "1 pairs"]) {
       assert.ok(!out.includes(wrong), `"${wrong}" is a defect the reader corrects on every line carrying it:\n${out}`);
     }
-    assert.match(out, /^1 source file, 1 line, 1 directory/m, out);
+    assert.match(out, /^1 source file, 1 line, 1 source-containing directory, max source-path depth 1$/m, out);
     assert.match(out, /1 commit touching source/, out);
   } finally { r.clean(); }
 });

@@ -621,13 +621,13 @@ function span(root, fam, { files, prefix, subtree }) {
   const dirCount = new Set(inScope.map((f) => f.dir)).size;
   const scope = scopes.length === 1 ? scopes[0] : at;
   const where = scopes.filter(Boolean).length ? scopes.map((one) => `${one}/`).join(" and ") : "the tree";
-  if (r.edges.size === 0) return notMeasured(fam.eco, `${r.provenance} resolved no edges over ${count(dirCount, "directory", "directories")} in ${where}; treat as not measured, not as no dependencies`);
+  if (r.edges.size === 0) return notMeasured(fam.eco, `${r.provenance} resolved no edges over ${count(dirCount, "source-containing directory", "source-containing directories")} in ${where}; treat as not measured, not as no dependencies`);
   // Proportional, not a constant. A graph covering a twentieth of the tree
   // is not a small graph, it is a failed one — and a fixed floor of three
   // let exactly that through while the message implied otherwise.
   const covered = r.nodes.size / Math.max(dirCount, 1);
   if (r.nodes.size < 2 || covered < 0.2) {
-    return notMeasured(fam.eco, `${r.provenance} resolved ${count(r.nodes.size, "node")} over ${count(dirCount, "source directory", "source directories")} in ${where} (${Math.round(covered * 100)}%); too little of it to read as a dependency graph`);
+    return notMeasured(fam.eco, `${r.provenance} resolved ${count(r.nodes.size, "node")} over ${count(dirCount, "source-containing directory", "source-containing directories")} in ${where} (${Math.round(covered * 100)}%); too little of it to read as a dependency graph`);
   }
 
   // The gate above judged the analyzer on what it was pointed at; this judges
@@ -680,7 +680,7 @@ function span(root, fam, { files, prefix, subtree }) {
 
 // A reason is data, exactly as History's `unavailable` is. Composing the
 // sentence a reader sees is Report's job, and this module does not do it —
-// see DESIGN.md, "Measure ↔ render".
+// see DESIGN.md, "Acquire ↔ render".
 function notMeasured(eco, why) {
   return { eco, measured: false, why };
 }

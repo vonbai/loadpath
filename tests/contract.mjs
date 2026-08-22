@@ -39,6 +39,21 @@ for (const [w, why] of Object.entries(banned)) {
   if (new RegExp(`\\b${w}`, "i").test(text)) errors.push(`SKILL.md uses "${w}" — ${why}`);
 }
 
+// The install-facing surfaces must name the population they actually promise.
+// Inventory holds only direct parents of admitted source files; "every
+// directory" falsely includes container-only and unsupported-file paths.
+for (const [file, body] of [
+  ["skills/loadpath/SKILL.md", text],
+  ["README.md", readFileSync(join(ROOT, "README.md"), "utf8")],
+]) {
+  if (/\bevery directory\b/i.test(body)) errors.push(`${file} promises every directory; the measured population is source-containing directories`);
+}
+
+const glossary = readFileSync(join(ROOT, "CONTEXT.md"), "utf8");
+for (const term of ["Source population", "Source-containing directory", "Source-path depth", "Layer depth"]) {
+  if (!glossary.includes(`**${term}**`)) errors.push(`CONTEXT.md does not define ${term}`);
+}
+
 // A verdict is not this tool's to emit; the skill must not teach one either.
 for (const v of ["god file", "code smell", "violation", "you should split"]) {
   if (text.toLowerCase().includes(v)) errors.push(`SKILL.md emits a verdict: "${v}"`);
@@ -117,6 +132,7 @@ const ADR_EVIDENCE = {
   // snapshot contains, not what it must never contain — so this is where a
   // `hist` added to that signature would be caught.
   "0014": /function snapshot\(\{ version, files, dirs, spans \}\)/,
+  "0015": /max source-path depth/,
 };
 for (const f of readdirSync(join(ROOT, "docs", "adr"))) {
   const n = f.slice(0, 4);
@@ -289,7 +305,7 @@ for (const m of new Set([...text.matchAll(/`(--[a-z]+)[^`]*`/g)].map((x) => x[1]
       ["manifest walk depth",       "scan.mjs",     /if \(depth > 3\) return;/,                         "descends 3 directories below the root"],
       ["binary sniff",              "scan.mjs",     /const BINARY_SNIFF = 8000;/,                       "8,000-byte binary sniff"],
       ["L0 caps",                   "report.mjs",   /const LANGS = 5, CONVS = 2, LARGEST = 5, RELOCS = 8, TANGLES = 3, FANOUT = 3;/,
-        "5 languages, 2 test conventions, 5 largest directories, 8 relocations, 3 entangled groups and 3 fan-out rows"],
+        "5 languages, 2 test conventions, 5 largest Source-containing directories, 8 relocations, 3 entangled groups and 3 fan-out rows"],
       ["fan-out gate",              "report.mjs",   /x\.o >= 3 && x\.i <= 1/,                           "3 or more outward edges with 1 or fewer inward"],
       ["compare list cap",          "report.mjs",   /const CAP = 5;/,                                   "names 5 members"],
       ["compare mass threshold",    "report.mjs",   /Math\.abs\(delta\) > 0\.2/,                        "more than a fifth"],

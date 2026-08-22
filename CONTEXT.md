@@ -32,16 +32,28 @@ _Avoid_: baseline, checkpoint, dump
 
 ### What the tool measures
 
+**Source population**:
+Current, readable, non-generated files in the requested scope whose extensions Inventory admits, after vendored, build-output and submodule paths are skipped. Inventory, Scatter, current-file History and layout Leads all use this population; Relocations deliberately do not.
+_Avoid_: all files, repository files, codebase files
+
+**Source-containing directory**:
+The direct parent of one or more files in the Source population. A container-only directory and a directory holding only unsupported file types are not members of this population.
+_Avoid_: directory, source directory, every directory
+
+**Source-path depth**:
+The number of repository-relative path segments to a Source-containing directory. The tool emits the maximum as an orientation fact only; it is not Layer depth and is not a quality threshold.
+_Avoid_: depth, tree depth, directory depth
+
 **Affinity**:
-Directories that change in the same commits. Measured from history, exact.
+Source-containing directories that change in the same commits. Measured from history, exact.
 _Avoid_: coupling, temporal coupling, change coupling
 
 **Scatter**:
-A name token recurring across several directories. A lead that one subject is spread across the tree — or that a layer name is standing where a subject name should be. Counted over distinct directories, not files.
+A name token recurring across several Source-containing directories. A lead that one subject is spread across the tree — or that a layer name is standing where a subject name should be. Counted over distinct Source-containing directories, not files.
 _Avoid_: duplication, naming smell, convention
 
 **Dependency**:
-One directory needing another to compile or run. Measured by a native analyzer, or Not measured.
+A unit in one Span needing another to compile or run. The unit is named by that ecosystem's analyzer; it may be a package, project, module directory or file directory. Measured by a native analyzer, or Not measured.
 _Avoid_: coupling, boundary, reference
 
 **Span**:
@@ -49,8 +61,12 @@ One ecosystem's dependency graph, measured by that ecosystem's own analyzer at t
 _Avoid_: the dependency graph, analyzer pass, ecosystem view
 
 **Load path**:
-The direction dependency runs through a codebase — each directory bears the weight of everything that imports it. The reading that gives the project its name.
+The direction dependency runs through a Span — each unit bears the weight of everything that imports it. The reading that gives the project its name.
 _Avoid_: dependency chain, call graph
+
+**Layer depth**:
+The number of layers along the longest dependency route in one measured Span after mutually entangled units are collapsed together. It has no physical-directory meaning.
+_Avoid_: depth, Source-path depth, module depth
 
 ### What the structure means
 
@@ -69,6 +85,10 @@ _Avoid_: erosion, decay, rot
 **Subject**:
 What a directory is about, named in the project's own vocabulary. `billing`, `session`, `market` — not a role, not a layer, not a name for the absence of one.
 _Avoid_: concern, domain, component, module
+
+**Deep module** *(John Ousterhout)*:
+Much behaviour hidden behind a small interface. A quality relationship, not a count of files, path segments or dependency layers.
+_Avoid_: deep directory, Source-path depth, Layer depth
 
 **Seam** *(Michael Feathers)*:
 A place where behaviour can be altered without editing at that place. Where a seam falls on disk is this project's concern; what sits behind it belongs to `codebase-design`.

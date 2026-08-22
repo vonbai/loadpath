@@ -12,7 +12,7 @@ So each declared ecosystem is measured by its own analyzer, rooted at the common
 
 **First answer wins.** This is what shipped. Its failure is silent partiality: a correct graph, correctly labelled, standing for a repository half of which it never looked at.
 
-**Disclosure only** — one graph plus a sentence naming the ecosystems that were not measured. It keeps the contradiction on the page and asks prose to defuse it, which is the move DESIGN.md rejects in "Measure ↔ render": a number that needs a disclaimer beside it to be read correctly is the wrong number.
+**Disclosure only** — one graph plus a sentence naming the ecosystems that were not measured. It keeps the contradiction on the page and asks prose to defuse it, which is the move DESIGN.md rejects in "Acquire ↔ render": a number that needs a disclaimer beside it to be read correctly is the wrong number.
 
 ## Consequences
 

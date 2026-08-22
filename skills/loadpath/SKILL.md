@@ -1,6 +1,6 @@
 ---
 name: loadpath
-description: Traces a codebase's load path — where code sits, which way dependencies run, which paths are frozen. Use when creating a package or directory, or deciding where something belongs; when a filename token keeps repeating or one change touches many directories; when dependencies form a cycle; when planning an extraction, split, or migration.
+description: Traces a codebase's load path — where source files sit, which way dependencies run, which paths are frozen. Use when creating a package or directory, deciding where something belongs, or reviewing directory hierarchy; when a filename token repeats or one change touches many directories; when dependencies form a cycle; when planning an extraction, split, or migration.
 ---
 
 # Loadpath
@@ -19,13 +19,24 @@ Three consequences hold in every use:
 
 - **"Not measured" is never zero.** Where no analyzer applies the output says so, and silence about a thing is not evidence about it.
 - **A number licenses a question, not a move.** Turnover, deadline pressure and lost knowledge leave fingerprints identical to design problems.
-- **Where a project records its own architecture, that record is the authority.** Read `CONTEXT.md`, ADRs, `CLAUDE.md` first, and make the tree express them.
+- **Where a project records its own architecture, that record is the authority.** Read `AGENTS.md` or `CLAUDE.md`, `CONTEXT.md`, and ADRs first, and make the tree express them.
+
+## One journey
+
+Follow one path through every task; the flags below change detail, not purpose.
+
+1. **Authority** — read the project's vocabulary, architecture decisions, agent instructions and load-bearing paths.
+2. **Orient** — run the default view once to widen recall.
+3. **Focus** — use `--structure` or `--dir PATH` only where a Lead earns more detail.
+4. **Read** — open the named code. Convert each pursued Lead into a confirmed Finding or an explicit “nothing here”.
+5. **Decide** — apply the project's authority first, then the placement and load rules below. State the consequence, never a score-derived verdict.
+6. **Verify** — for a move, compare a pre-move Snapshot after it lands; also run the project's own smallest gate covering the changed seam.
 
 ## Run it
 
 ```
-node scripts/loadpath.mjs [REPO]                orient — 781–1,637 tokens measured
-node scripts/loadpath.mjs [REPO] --structure    every directory, plus entangled groups
+node scripts/loadpath.mjs [REPO]                orient — 830–1,721 tokens measured
+node scripts/loadpath.mjs [REPO] --structure    every source-containing directory, plus entangled groups
 node scripts/loadpath.mjs [REPO] --dir PATH     one subtree, file by file, with the load
                                                 crossing its line and each file's last touch
 node scripts/loadpath.mjs [REPO] --snapshot F   also record this scan's layout and spans
@@ -36,7 +47,7 @@ node scripts/loadpath.mjs [REPO] --compare F    only what moved since that snaps
 
 ## Capability and language coverage
 
-- **Inventory, distributions, scatter and current-file history** recognise Go, Python, JavaScript/TypeScript, Vue/Svelte, Rust, Java/Kotlin/Scala, Ruby, PHP, C#, Swift/Objective-C/C/C++, Elixir, Clojure, Haskell, OCaml, Solidity, Zig, Dart, Lua, Perl, R and Julia source extensions. These measurements are language-independent; shell, SQL, protobuf and Terraform files are not in this source population. Relocations deliberately remain wider and count every renamed file type.
+- **Inventory, distributions, scatter and current-file history** recognise Go, Python, JavaScript/TypeScript, Vue/Svelte, Rust, Java/Kotlin/Scala, Ruby, PHP, C#, Swift/Objective-C/C/C++, Elixir, Clojure, Haskell, OCaml, Solidity, Zig, Dart, Lua, Perl, R and Julia source extensions. Together these admitted files are the **Source population**. Shell, SQL, protobuf and Terraform files are outside it; a **Source-containing directory** is only the direct parent of one or more admitted files. Relocations deliberately remain wider and count every renamed file type.
 - **Dependency spans** are implemented only for Go (`go list`, Go on `PATH`, warm module cache), C# (`ProjectReference`, built in), Python (`python3` plus `grimp`) and Node/TypeScript (`madge@8.0.0` from the warm offline `npx` cache). Go searches for modules four levels below its analyzer root; C# searches twelve; both disclose directories below that depth. Node measures every existing `src`, `lib`, `packages`, `apps`, `app` and `web` root at the declared module root.
 - **Other declared ecosystems** still receive the exact structure and history measurements, but their dependency span says **not measured**. Do not translate that into zero edges. Snapshot and compare record only measured spans, alongside file and directory layout.
 
@@ -44,14 +55,16 @@ node scripts/loadpath.mjs [REPO] --compare F    only what moved since that snaps
 
 **The distribution comes before every row that uses it.** `136f` is meaningless until `median 7` is on the page; then it is 19× the median, which is a fact you can check.
 
-- **files and lines per directory** — median, p90, max. Everything below is read against these.
-- **scattered names** — name tokens recurring across directories, counted over distinct directories rather than files, with role words such as `util` and `index` refused. A token in nine directories is one subject spread across the tree, or a layer name standing where a subject name should be; which of the two it is, you learn by opening them.
-- **activity** — directories touched recently, and how many were not. A directory with no recent commits is *unmeasured*, not known to be safe: on real repositories a fifth to two thirds of files go untouched in a window while some of them still carry later defects.
-- **top author N% of Mc** — the share of commits by the largest contributor, beside the raw count. Concentration ranked first among 65 metrics in a defect study where the raw count did not; it is undefined where nothing was committed, which is why both are printed. Where one author holds every directory's commits the share is dropped and the page says so in a line of its own — its absence there is a fact about the repository, not a gap in the measurement.
+- **files per Source-containing directory and lines per file** — median, p90, max. Everything below is read against these. **Source-path depth** is the repository-relative segment count to such a directory; the first line prints its maximum as physical orientation, never as a quality threshold or dependency depth.
+- **scattered names** — name tokens recurring across Source-containing directories, counted over distinct directories rather than files, with role words such as `util` and `index` refused. A token in nine directories is one subject spread across the tree, or a layer name standing where a subject name should be; which of the two it is, you learn by opening them.
+- **activity** — Source-containing directories touched recently, and how many were not. A row with no recent commits is *unmeasured*, not known to be safe: on real repositories a fifth to two thirds of files go untouched in a window while some of them still carry later defects.
+- **top author N% of Mc** — the share of commits by the largest contributor, beside the raw count. Concentration ranked first among 65 metrics in a defect study where the raw count did not; it is undefined where nothing was committed, which is why both are printed. Where one author holds every Source-containing directory's commits the share is dropped and the page says so in a line of its own — its absence there is a fact about the repository, not a gap in the measurement.
 - **relocations** — what this repository has already moved, from git's rename records. The migration it has already done is usually the best evidence of the one it is mid-way through. Alone on the page this is a record rather than a lead, so it counts every file a rename touched and not only source, and its header says so; the side a move came from is expected to be gone.
-- **co-change** — directories changing in the same commits, one commit casting one vote split across the pairs it implies, bucketed into time windows. Each row carries the vote it received in every window, and the denominator the share is taken over, because an average can look excellent while its worst case is total. Commits wider than the cap are sweeps, not coupling, and their count is disclosed.
+- **co-change** — Source-containing directories changing in the same commits, one commit casting one vote split across the pairs it implies, bucketed into time windows. Each row carries the vote it received in every window, and the denominator the share is taken over, because an average can look excellent while its worst case is total. Commits wider than the cap are sweeps, not coupling, and their count is disclosed.
 - **declared modules** — what the manifests say this repository builds, which is also what decides which analyzer runs. The ones the filters refused are counted with their reason — copies sharing one package name, a file declaring no module of its own, a scaffold or fixture path — because three real modules under three hundred manifests is a normal shape and not a failure to look.
-- **dependencies** — one **span** per ecosystem the repository declares, each measured by that ecosystem's own analyzer, named in the output. Spans stand side by side and are never added together: a Go package and a TypeScript file directory are not the same unit. An ecosystem that cannot be measured here says so and says why. Where that reason names a remedy — a toolchain to install, a cache to warm — put the command to the user for approval rather than running it, because a read must not change the machine; carry on with the exact measurements meanwhile, and raise it only when the task rests on the dependency graph. Entanglement is reported as **groups**: inside a group nothing can be built, tested, or replaced alone. Layer depth is how far weight travels before it reaches something that depends on nothing, and a node listed for its fan-out also carries how many of that graph's nodes it reaches transitively — which is what a change to it arrives at.
+- **dependencies** — one **Span** per ecosystem the repository declares, each measured by that ecosystem's own analyzer, named in the output. Spans stand side by side and are never added together: a Go package and a TypeScript file directory are not the same unit. An ecosystem that cannot be measured here says so and says why. Where that reason names a remedy — a toolchain to install, a cache to warm — put the command to the user for approval rather than running it, because a read must not change the machine; carry on with the exact measurements meanwhile, and raise it only when the task rests on the dependency graph. Entanglement is reported as **groups**: inside a group nothing can be built, tested, or replaced alone. **Layer depth** is how far weight travels before it reaches something that depends on nothing; it is separate from Source-path depth. A node listed for fan-out also carries how many graph nodes it reaches transitively — what a change to it arrives at.
+
+File-level output covers placement, size, test convention and last touch. It does not parse symbols, declarations or interfaces inside a file; read those to make the Finding. Do not add a generic AST pass unless internal file structure becomes the product's named core question.
 
 **No list here stops without saying so.** Every capped list ends with what it did not show, and every refusal is counted on the page: files carrying a source extension with no line count, history records that did not parse, manifests the filters dropped, and directories below an analyzer's search depth. A short list is short because the repository is, not because the page ran out of room — so read a missing `+N more` as the claim it is.
 
@@ -66,12 +79,13 @@ Answer in order; stop at the first rule that decides.
    New code has no history, so predict instead — **name a requirement likely to change and list the files that change with it.** Run it for two or three plausible changes; the list that recurs is the subject. This is Parnas's method, working forward from the decisions most likely to change.
 3. **Which way does the load run?** A thing belongs where dependencies can point one way. If placing it here makes two directories depend on each other, it belongs in neither — in a third both may depend on, or wholly inside one.
 4. **What decision does it hide?** If it exists to keep a format, protocol, vendor or schema from leaking, it belongs with that choice's other keepers, behind one **seam**.
-5. **Would a reader look here?** Name the directory for the subject, in the project's own words.
-6. **Is the second caller real?** Create a package or seam when the second real caller exists. Anticipatory structure is the most expensive kind to remove, because it looks deliberate.
+5. **Does every path segment pay rent?** Keep a level only when it names a **Subject**, expresses a language- or project-enforced seam, or preserves a Load-bearing path constraint. Collapse adjacent levels that repeat the same taxonomy. Source-path depth is a fact, never a maximum-depth rule.
+6. **Would a reader look here?** Name the Subject directory in the project's own words.
+7. **Is the second caller real?** Create a package or seam when the second real caller exists. Anticipatory structure is the most expensive kind to remove, because it looks deliberate.
 
 **Done when** the placement names which rule decided it, states the direction of dependency, and the directory carries a subject from the project's vocabulary.
 
-Directory names are singular nouns naming the subject — `billing`, `session`, `market`. When no subject name comes, that is the finding, and it is worth more than any directory you could create to hold the gap: the code's purpose is not yet understood. Say so, and place the file with its nearest co-changing neighbour until it is.
+Subject directory names are singular nouns — `billing`, `session`, `market`. Ecosystem or project containers such as `src`, `internal`, `tests` and `packages` may be plural or conventional when they enforce a real seam or repository shape; `references/language-conventions.md` decides their spelling. When no Subject name comes, that is the Finding, and it is worth more than any directory you could create to hold the gap: the code's purpose is not yet understood. Say so, and place the file with its nearest co-changing neighbour until it is.
 
 ## Load-bearing paths
 

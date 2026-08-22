@@ -154,7 +154,7 @@ for (const c of CORPUS) {
     corpus: c.name,
     sha: c.sha.slice(0, 12),
     files: grab(/^([\d,]+) source files?,/m),
-    directories: grab(/, (\d+) director(?:y|ies),/),
+    sourceContainingDirectories: grab(/, ([\d,]+) source-containing director(?:y|ies),/),
     ...(spanBlocks.length ? { spans: spanBlocks } : {
       edges: grab(/dependencies\s+([\d,]+) edges?\b/),
       entangled: /no mutually entangled group/.test(out) ? 0 : grab(/(\d+) mutually entangled group/),
@@ -175,16 +175,16 @@ for (const c of CORPUS) {
 let failed = false;
 if (warmOnly) process.exit(failedFetch ? 1 : 0);
 
-console.log("corpus                sha           files  dirs  edges  entangled  layers  tokens   ms  analyzer");
+console.log("corpus                sha           files  source-containing-directories  edges  entangled  layers  tokens   ms  analyzer");
 for (const r of results) {
   if (r.spans) {
-    console.log(`${r.corpus.padEnd(21)} ${r.sha}  ${String(r.files).padStart(6)} ${String(r.directories).padStart(5)}      —          —       — ${String(r.tokens).padStart(7)} ${String(r.ms).padStart(4)}  ${r.spans.length} spans:`);
+    console.log(`${r.corpus.padEnd(21)} ${r.sha}  ${String(r.files).padStart(6)} ${String(r.sourceContainingDirectories).padStart(29)}      —          —       — ${String(r.tokens).padStart(7)} ${String(r.ms).padStart(4)}  ${r.spans.length} spans:`);
     for (const sp of r.spans) {
-      console.log(`${"".padEnd(21)} ${"".padEnd(12)}  ${"".padStart(6)} ${"".padStart(5)} ${String(sp.edges).padStart(6)} ${String(sp.entangled).padStart(10)} ${String(sp.layers).padStart(7)} ${"".padStart(7)} ${"".padStart(4)}  (${sp.eco}) ${sp.analyzer}`);
+      console.log(`${"".padEnd(21)} ${"".padEnd(12)}  ${"".padStart(6)} ${"".padStart(29)} ${String(sp.edges).padStart(6)} ${String(sp.entangled).padStart(10)} ${String(sp.layers).padStart(7)} ${"".padStart(7)} ${"".padStart(4)}  (${sp.eco}) ${sp.analyzer}`);
     }
   } else {
     console.log(
-      `${r.corpus.padEnd(21)} ${r.sha}  ${String(r.files).padStart(6)} ${String(r.directories).padStart(5)} ` +
+      `${r.corpus.padEnd(21)} ${r.sha}  ${String(r.files).padStart(6)} ${String(r.sourceContainingDirectories).padStart(29)} ` +
       `${String(r.edges).padStart(6)} ${String(r.entangled).padStart(10)} ${String(r.layers).padStart(7)} ` +
       `${String(r.tokens).padStart(7)} ${String(r.ms).padStart(4)}  ${r.analyzer}`);
   }
@@ -215,7 +215,7 @@ const BASE = join(ROOT, "tests", "measure-baseline.json");
 const analyzerId = (s) => String(s).replace(/\s+\(?(?:go)?v?\d+(?:\.\d+)*\)?$/, "");
 const record = process.argv.includes("--record");
 const seen = Object.fromEntries(results.map((r) => [r.corpus, {
-  sha: r.sha, files: r.files, directories: r.directories,
+  sha: r.sha, files: r.files, sourceContainingDirectories: r.sourceContainingDirectories,
   ...(r.spans ? { spans: r.spans } : { edges: r.edges, entangled: r.entangled, layers: r.layers, analyzer: r.analyzer }),
   // Recorded so the range the README publishes can be checked against the
   // output that produced it, instead of drifting with every wording change.

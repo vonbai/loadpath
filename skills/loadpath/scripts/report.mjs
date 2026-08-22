@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Loadpath — rendering. Nothing here measures; nothing that measures prints.
+// Loadpath — rendering. Nothing here acquires source facts; nothing that
+// acquires them prints.
 //
 // L0 orients, L1 gives structure, L2 gives detail. The L0 algorithm is the same
-// everywhere: state the distribution, then rank by deviation from it. `136f`
+// everywhere: state the distribution, then rank by size against it. `136f`
 // means nothing until `median 7` is on the page, and then it means 19x the
 // median — a fact about the distribution, exact and checkable.
 
@@ -19,10 +20,11 @@ const more = (n, what = "more") => (n > 0 ? `, +${n} ${what}` : "");
 // in it is a threshold the reader cannot see and the writer forgets.
 const LANGS = 5, CONVS = 2, LARGEST = 5, RELOCS = 8, TANGLES = 3, FANOUT = 3;
 
-// One author holding every directory's commits. The share column then prints
-// the same two figures on every row — measured at 54 rows of it on this
-// repository — which is a column of noise wide enough to cost real output. It
-// is a fact about the repository, so it is stated once and the column goes.
+// One author holding every source-containing directory's commits. The share
+// column then prints the same two figures on every row — measured at 54 rows
+// of it on this repository — which is a column of noise wide enough to cost
+// real output. It is a fact about the repository, so it is stated once and the
+// column goes.
 const singleAuthor = (hist) =>
   Boolean(hist.available && hist.dirs?.size) &&
   [...hist.dirs.values()].every((e) => e.topShare === 1 && e.majorAuthors === 1);
@@ -46,14 +48,15 @@ export function renderL0({ files, dirs, conv, hist, mans, filtered = [], noise =
   const langs = byCount.slice(0, LANGS).map(([e, n]) => `${e}×${n}`).join(", ")
     + more(byCount.length - LANGS);
 
-  out.push(`${count(files.length, "source file")}, ${count(totalLines, "line")}, ${count(dirs.size, "directory", "directories")}, ${depth} deep`);
+  out.push(`${count(files.length, "source file")}, ${count(totalLines, "line")}, ` +
+           `${count(dirs.size, "source-containing directory", "source-containing directories")}, max source-path depth ${depth}`);
   out.push(`languages   ${langs}`);
   out.push(conv.winners.length
     ? `tests       ${count(tests, "file")} by ${conv.winners.slice(0, CONVS).map((w) => w.name).join(" and ")}${more(conv.winners.length - CONVS)}`
     : `tests       no test-path convention detected`);
   out.push("");
-  out.push(`files per directory   median ${median(fileCounts)}   p90 ${pct(fileCounts, 0.9)}   max ${maxOf(fileCounts)}`);
-  out.push(`lines per file        median ${median(lineCounts)}   p90 ${pct(lineCounts, 0.9)}   max ${maxOf(lineCounts)}`);
+  out.push(`files per source-containing directory   median ${median(fileCounts)}   p90 ${pct(fileCounts, 0.9)}   max ${maxOf(fileCounts)}`);
+  out.push(`lines per file                         median ${median(lineCounts)}   p90 ${pct(lineCounts, 0.9)}   max ${maxOf(lineCounts)}`);
   // Files that exist, carry a source extension, and are in none of the figures
   // above. What a measurement refused is part of the measurement: a binary file
   // used to enter the total, the median and the p90 carrying a count of its
@@ -69,8 +72,8 @@ export function renderL0({ files, dirs, conv, hist, mans, filtered = [], noise =
   // section that vanishes when it finds nothing cannot be told from one that
   // was never computed.
   out.push(scattered.length
-    ? `scattered names       ${scattered.map((s, i) => `${s.token} ×${s.files} across ${s.dirs}${i ? "" : " directories"}`).join(" · ")}`
-    : `scattered names       none recur across 3 or more directories`);
+    ? `scattered names       ${scattered.map((s) => `${s.token} ×${s.files} across ${s.dirs} source-containing directories`).join(" · ")}`
+    : `scattered names       none recur across 3 or more source-containing directories`);
 
   out.push("");
   if (hist.available) {
@@ -85,12 +88,12 @@ export function renderL0({ files, dirs, conv, hist, mans, filtered = [], noise =
     // The split, the horizon and the join against the tree are all measured in
     // scan.mjs; this line spends them.
     out.push(`activity    ${hist.active} touched in the last ${count(hist.horizonDays, "day")}, ${hist.dormant} not, ` +
-             `${hist.unseen} with no commit in this window at all — of ${count(dirs.size, "directory", "directories")}`);
-    if (hist.dormant || hist.unseen) out.push(`            a directory with no recent commit is unmeasured here, not known to be safe`);
+             `${hist.unseen} with no commit in this window at all — of ${count(dirs.size, "source-containing directory", "source-containing directories")}`);
+    if (hist.dormant || hist.unseen) out.push(`            a source-containing directory with no recent commit is unmeasured here, not known to be safe`);
     // A record git holds that this parser could not read. Counting them is what
     // separates a repository with nothing there from a parser that lost it.
     if (hist.skipped) out.push(`            ${count(hist.skipped, "history record")} did not parse and ${hist.skipped === 1 ? "was" : "were"} skipped`);
-    if (singleAuthor(hist)) out.push(`            one author holds every directory's commits, so the share is dropped from the rows below`);
+    if (singleAuthor(hist)) out.push(`            one author holds every source-containing directory's commits, so the share is dropped from the rows below`);
   } else {
     out.push(`history     not measured — ${hist.reason}`);
   }
@@ -141,10 +144,10 @@ export function renderL0({ files, dirs, conv, hist, mans, filtered = [], noise =
   // With a flat distribution every ratio is 1 and the sort is a no-op, so the
   // rows would be insertion order presented as outliers.
   if (!ranked.length || ranked[0].files <= med) {
-    out.push(`no directory departs from those norms; the distribution is flat`);
+    out.push(`no source-containing directory departs from those norms; the distribution is flat`);
     return out.join("\n");
   }
-  out.push(`largest directories, against the median`);
+  out.push(`largest source-containing directories, against the median`);
   // Where one author holds everything, "top author 100%" is the same phrase on
   // every row and the count beside it is the only figure that varies.
   const one = singleAuthor(hist);
@@ -153,15 +156,16 @@ export function renderL0({ files, dirs, conv, hist, mans, filtered = [], noise =
     const share = h ? (one ? `  ${h.commits}c` : `  top author ${Math.round(h.topShare * 100)}% of ${h.commits}c`) : "";
     out.push(`  ${String(d.files).padStart(4)}f  ${(d.files / med).toFixed(0)}× median   ${num(d.lines).padStart(8)}L   ${d.path || "."}${share}`);
   }
-  if (dirs.size > ranked.length) out.push(`  +${dirs.size - ranked.length} more directories, all smaller`);
+  if (dirs.size > ranked.length) out.push(`  +${dirs.size - ranked.length} more source-containing directories, all smaller`);
   return out.join("\n");
 }
 
 // ── L1: structure ────────────────────────────────────────────────────────────
 //
-// A flat directory table does not scale — measured at ~14,000 tokens on a
-// 3,154-directory repository. Budget is met by binary search over how many
-// rows survive, after Aider's repo map, rather than a hardcoded top-N.
+// A flat source-containing-directory table does not scale — measured at
+// ~14,000 tokens on a 3,154-row repository. Budget is met by binary search
+// over how many rows survive, after Aider's repo map, rather than a hardcoded
+// top-N.
 
 export function renderL1({ dirs, hist, spans, budget }) {
   const groups = entangledGroups(spans);
@@ -217,9 +221,9 @@ export function renderL1({ dirs, hist, spans, budget }) {
     const rest = rows.length - keep.length;
     if (rest > 0) {
       const rf = rows.slice(n).reduce((s, r) => s + Number(r.cells[0].replace("f", "")), 0);
-      lines.push(`  +${count(rest, "directory", "directories")} not shown (${count(rf, "file")})`);
+      lines.push(`  +${count(rest, "source-containing directory", "source-containing directories")} not shown (${count(rf, "file")})`);
     }
-    const head = "  " + names.map((h, i) => h.padStart(w[i])).join(" ") + "  directory"
+    const head = "  " + names.map((h, i) => h.padStart(w[i])).join(" ") + "  source-containing directory"
       + (hist.available ? "" : "   (? = history not measured)");
     return [head, ...lines].join("\n");
   };
@@ -234,12 +238,13 @@ export function renderL1({ dirs, hist, spans, budget }) {
     const s = draw(mid);
     if (tokens(s) <= budget) { best = s; kept = mid; lo = mid + 1; } else hi = mid - 1;
   }
-  // "every directory" stops being true the moment the budget trims one, and
-  // the promise was printed above a table that had already dropped a third of
-  // the tree. The section names what it actually shows.
+  // "every source-containing directory" stops being true the moment the
+  // budget trims one, and the promise was printed above a table that had
+  // already dropped a third of its population. The section names what it
+  // actually shows.
   return [kept < rows.length
-    ? "structure   every directory the budget admits, largest first"
-    : "structure   every directory, largest first", best].join("\n");
+    ? "structure   every source-containing directory the budget admits, largest first"
+    : "structure   every source-containing directory, largest first", best].join("\n");
 }
 
 // ── Co-change ────────────────────────────────────────────────────────────────
@@ -254,7 +259,7 @@ export function renderCoChange(hist, top) {
   const out = [];
   const breadths = hist.commits.map((c) => new Set(c.paths.map((p) => dirname(p))).size).sort((a, b) => a - b);
   const floor = `${CO_FLOOR} votes over ${count(CO_SUPPORT, "commit")}`;
-  out.push(`co-change   ${count(hist.commits.length, "commit")}, median ${count(median(breadths), "directory", "directories")} each, ${count(hist.windows, "equal time window")}`);
+  out.push(`co-change   ${count(hist.commits.length, "commit")}, median ${count(median(breadths), "source-containing directory", "source-containing directories")} each, ${count(hist.windows, "equal time window")}`);
   if (hist.capped) out.push(`            ${count(hist.capped, "commit")} touched more than the breadth cap and ${hist.capped === 1 ? "was" : "were"} excluded as sweeps`);
   // The floor travels with the sentence about it, in both directions: a reader
   // who sees nothing needs to know what nothing means here, and a reader who
@@ -263,8 +268,8 @@ export function renderCoChange(hist, top) {
   if (!hist.pairs.length) { out.push(`            no pair reached the floor of ${floor}`); return out.join("\n"); }
   out.push("");
   out.push(`  Each commit casts one vote, split across the pairs it implies. "share" is`);
-  out.push(`  that vote-sum over the commits of whichever directory moved less often,`);
-  out.push(`  and a pair is printed once it clears ${floor}.`);
+  out.push(`  that vote-sum over the commits of whichever source-containing directory`);
+  out.push(`  moved less often, and a pair is printed once it clears ${floor}.`);
   out.push("");
   out.push(`  share  vote per window          pair`);
   for (const p of hist.pairs.slice(0, top)) {
@@ -280,9 +285,9 @@ export function renderCoChange(hist, top) {
   const rest = hist.pairs.length - Math.min(top, hist.pairs.length);
   if (rest > 0) out.push(`  +${count(rest, "pair")} above that floor, not shown (--top ${top})`);
   out.push("");
-  out.push(`  Directories changing together is the Common Closure criterion, a design`);
-  out.push(`  argument. No study reviewed for this tool tested whether it predicts`);
-  out.push(`  anything, so read it as a question about placement, not as risk.`);
+  out.push(`  Source-containing directories changing together is the Common Closure`);
+  out.push(`  criterion, a design argument. No study reviewed for this tool tested`);
+  out.push(`  whether it predicts anything, so read it as a placement question, not risk.`);
   return out.join("\n");
 }
 
@@ -518,7 +523,7 @@ export function renderCompare(before, now) {
   out.push(`snapshot    loadpath ${before.version}, schema ${before.schema}`);
   out.push(`now         loadpath ${now.version}, schema ${now.schema}`);
   out.push(`            ${num(before.files)} → ${count(now.files, "source file")}, ` +
-           `${num(Object.keys(before.dirs).length)} → ${count(Object.keys(now.dirs).length, "directory", "directories")}`);
+           `${num(Object.keys(before.dirs).length)} → ${count(Object.keys(now.dirs).length, "source-containing directory", "source-containing directories")}`);
   const moved = [];
 
   // ── Spans, matched by ecosystem ──
@@ -563,17 +568,18 @@ export function renderCompare(before, now) {
   const appeared = Object.keys(now.dirs).filter((d) => !(d in before.dirs)).sort();
   const gone = Object.keys(before.dirs).filter((d) => !(d in now.dirs)).sort();
   if (appeared.length || gone.length) {
-    moved.push("directories");
+    moved.push("source-containing directories");
     out.push("");
     const rows = [];
     if (appeared.length) rows.push(`${appeared.length} appeared   ${capped(appeared)}`);
     if (gone.length) rows.push(`${gone.length} gone       ${capped(gone)}`);
-    out.push(`directories   ${rows[0]}`);
-    for (const r of rows.slice(1)) out.push(" ".repeat(14) + r);
+    out.push(`source-containing directories   ${rows[0]}`);
+    for (const r of rows.slice(1)) out.push(" ".repeat(32) + r);
   }
 
-  // A directory that kept its name can still have had its contents moved out
-  // from under it, which is the half of a restructuring the name list misses.
+  // A source-containing directory that kept its name can still have had its
+  // contents moved out from under it, which is the half of a restructuring
+  // the name list misses.
   const mass = [];
   for (const [d, was] of Object.entries(before.dirs)) {
     const is = now.dirs[d];
@@ -585,7 +591,7 @@ export function renderCompare(before, now) {
     moved.push("mass");
     mass.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
     out.push("");
-    out.push(`mass moved by more than a fifth`);
+    out.push(`source-containing directory mass moved by more than a fifth`);
     for (const m of mass.slice(0, CAP)) {
       out.push(`  ${num(m.was.lines)}L → ${num(m.is.lines)}L   ${m.delta > 0 ? "+" : ""}${Math.round(m.delta * 100)}%   ${m.d}`);
     }

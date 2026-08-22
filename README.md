@@ -6,21 +6,22 @@ An Agent Skill that traces how a codebase carries its weight — where code sits
 
 在建筑里，**荷载路径**是重量传到地基的路线。依赖就是代码库的荷载路径：每个目录承受着所有 import 它的东西的重量。目录树是别处已做出的决策的**投影**——它要么表达那些决策，要么在说谎。
 
-Loadpath 追踪真实的荷载路径。它**指向值得读的代码，不替你下判断**。
+Loadpath 追踪真实的荷载路径。它**指向值得读的代码，不替你下判断**。产品主路径只有一条：**先读项目权威 → 全局定向 → 聚焦结构或子树 → 读代码 → 决策 → 验证迁移结果**；各个参数只是逐层披露，不是互相竞争的模式。
 
 ## What it emits
 
-One command, 781–1,637 tokens across the four pinned corpora (36 to 1,093 source files), and 868–3,618 with `--structure`. Those are upper bounds: the divisor is calibrated with tiktoken against this tool's densest output, not a general prose ratio.
+One command, 830–1,721 tokens across the four pinned corpora (36 to 1,093 source files), and 931–3,706 with `--structure`. Those are upper bounds: the divisor is calibrated with tiktoken against this tool's densest output, not a general prose ratio.
 
-- **the distribution first** — median, p90 and max files per directory and lines per file, so every row after it is readable. `136f` means nothing until `median 7` is on the page; then it is 19× the median.
-- **scattered names** — name tokens recurring across directories, counted over distinct directories rather than files, role words refused. One subject spread across the tree, or a layer name standing where a subject name should be.
-- **activity** — what was touched recently, and what was not. A directory with no recent commits is *unmeasured*, not known to be safe.
-- **commit share** — the top author's fraction of a directory's commits, beside the raw count.
+- **the distribution first** — median, p90 and max files per **Source-containing directory** and lines per file, so every row after it is readable. That directory is only the direct parent of an admitted source file; container-only and unsupported-file directories are outside the population. `136f` means nothing until `median 7` is on the page; then it is 19× the median.
+- **Source-path depth** — the maximum repository-relative segment count to a Source-containing directory, named as physical orientation. It is not dependency Layer depth and carries no quality threshold.
+- **scattered names** — name tokens recurring across Source-containing directories, counted over distinct directories rather than files, role words refused. One Subject spread across the tree, or a layer name standing where a Subject name should be.
+- **activity** — what Source-containing directories were touched recently, and what was not. A row with no recent commits is *unmeasured*, not known to be safe.
+- **commit share** — the top author's fraction of a Source-containing directory's commits, beside the raw count.
 - **relocations** — what this repository has already moved, from git's rename records, counting every file type rather than only source. The migration already done is usually the best evidence of the one in progress.
-- **co-change** — directories changing in the same commits, one commit casting one vote split across the pairs it implies, with the vote it received in every window and the denominator its share is taken over.
-- **dependencies** — from the ecosystem's own analyzer, named in the output, one graph per ecosystem the repository declares. Entanglement as *groups*, how many layers deep the load path runs, and how much of the graph the widest fan-out nodes reach.
+- **co-change** — Source-containing directories changing in the same commits, one commit casting one vote split across the pairs it implies, with the vote it received in every window and the denominator its share is taken over.
+- **dependencies** — from the ecosystem's own analyzer, named in the output, one Span per ecosystem the repository declares. Entanglement as *groups*, named Layer depth, and how much of the graph the widest fan-out nodes reach.
 
-`--structure` adds every directory and the entangled groups. `--dir PATH` gives one subtree file by file, with each file's last touch and the load crossing the subtree's line in both directions. `--snapshot FILE` records a scan's layout and spans; `--compare FILE` prints only what moved since — and says, every time, that co-change and activity lag a move by design.
+`--structure` adds every Source-containing directory and the entangled groups. `--dir PATH` gives one subtree file by file, with each file's last touch and the load crossing the subtree's line in both directions. File-level means placement, size, test convention and last touch; Loadpath does not claim to parse symbols or interfaces inside files. `--snapshot FILE` records a scan's layout and Spans; `--compare FILE` prints only what moved since — and says, every time, that co-change and activity lag a move by design.
 
 ## The rule it is built on
 
@@ -53,7 +54,7 @@ Calling a real analyzer is not the same as trusting it: the dominant failure mod
 Requires Node 18 or newer. Filesystem and history measurements need nothing else; dependency spans have the analyzer requirements above.
 
 ```bash
-npx --yes skills add vonbai/loadpath@v0.3.2 --global
+npx --yes skills add vonbai/loadpath@v0.4.0 --global
 ```
 
 The unpinned form, `vonbai/loadpath`, tracks `main`: every change there has passed the single local `npm test` gate below, but only a release-tagged state has run mutation analysis and the suite across Node 18, 22 and 24 on Linux with a cold analyzer cache.
@@ -70,14 +71,14 @@ node ~/.agents/skills/loadpath/scripts/loadpath.mjs /path/to/repo
 
 Everything published here is recomputed by the repository itself. There is **one gate**: `npm test` — acceptance, contract and measurement, about half a minute — and a change passes it before it lands. The deep questions (is the suite itself alive, does this hold on other platforms and Node versions, on a cold cache) are asked once per release, remotely, by the tag-triggered battery; a mutation survivor there stops the release, not your afternoon.
 
-- `node --test tests/loadpath.test.mjs` — 139 acceptance tests over synthetic repositories built per case.
-- `node tests/mutate.mjs` — 120 one-line feature deletions; **a surviving mutant fails the release.** v0.1.0's suite let 14 of 20 pass, including the line that broke its own headline claim. Three are marked *equivalent* — a second guard already produces the same observable, so they are asserted to survive and a kill means the stated proof went stale — and five are listed every run as *not exercised*, with the toolchain each would need. The number is never the claim; the list is.
+- `node --test tests/loadpath.test.mjs` — 140 acceptance tests over synthetic repositories built per case.
+- `node tests/mutate.mjs` — 122 one-line feature deletions; **a surviving mutant fails the release.** v0.1.0's suite let 14 of 20 pass, including the line that broke its own headline claim. Three are marked *equivalent* — a second guard already produces the same observable, so they are asserted to survive and a kill means the stated proof went stale — and five are listed every run as *not exercised*, with the toolchain each would need. The number is never the claim; the list is.
 - `node tests/measure.mjs` — every published figure recomputed from four pinned public repositories, one of them a Go+TypeScript monorepo that holds the span contract to real bytes, and compared against `tests/measure-baseline.json`. A pin that does not resolve fails the run.
 - `node tests/contract.mjs` — the skill's frontmatter, budget, pointers and vocabulary.
 
 ## Evidence
 
-`DESIGN.md` holds the principles and the module design; `docs/adr/` records fourteen decisions and what each traded away; `docs/research/findings.md` records what the research supports, what it rules out, and what nothing supports — including three measurements this tool emits with no predictive validation, said plainly rather than quietly kept.
+`DESIGN.md` holds the principles and the module design; `docs/adr/` records fifteen decisions and what each traded away; `docs/research/findings.md` records what the research supports, what it rules out, and what nothing supports — including three measurements this tool emits with no predictive validation, said plainly rather than quietly kept.
 
 ## License
 

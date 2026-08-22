@@ -18,7 +18,7 @@ import { dependencies } from "./deps.mjs";
 // does not travel with the installed skill. Without this constant an installed
 // copy cannot say what it is, and output pasted into an issue carries no
 // provenance. tests/contract.mjs holds it equal to package.json.
-const VERSION = "0.3.2";
+const VERSION = "0.4.0";
 
 // What the command line said, and what this tool did with it. Every departure
 // between the two is carried out of here rather than made quietly: a flag it
@@ -121,7 +121,7 @@ const HELP = `loadpath — exact facts about how a codebase carries its weight
   --cap 30            breadth cap; wider commits are sweeps
   --top 12            co-change pairs to print
   --dir PATH          file-level detail for one subtree
-  --structure         add the structure table and entangled groups
+  --structure         add source-containing directories and entangled groups
   --snapshot FILE     also write this scan's layout and spans to FILE
   --compare FILE      print only what moved since FILE, and nothing else
 
@@ -280,7 +280,7 @@ function main() {
       }
 
       parts.push("");
-      parts.push("next        --structure for every directory and the entangled groups");
+      parts.push("next        --structure for every source-containing directory and the entangled groups");
       parts.push("            --dir PATH for one subtree, file by file");
       parts.push("            then read the code. These are leads, not findings.");
       text = parts.join("\n");

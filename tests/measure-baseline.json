@@ -2,47 +2,47 @@
   "spf13/cobra": {
     "sha": "adbc8813901b",
     "files": 36,
-    "directories": 2,
+    "sourceContainingDirectories": 2,
     "edges": 1,
     "entangled": 0,
     "layers": 2,
-    "analyzer": "go list -e -mod=readonly (go1.26.4)",
-    "orientTokens": 781,
-    "structureTokens": 868
+    "analyzer": "go list -e -mod=readonly (go1.26.7)",
+    "orientTokens": 830,
+    "structureTokens": 931
   },
   "cli/cli": {
     "sha": "95d3a1db45ab",
     "files": 896,
-    "directories": 308,
+    "sourceContainingDirectories": 308,
     "edges": 1710,
     "entangled": 0,
     "layers": 14,
-    "analyzer": "go list -e -mod=readonly (go1.26.4)",
-    "orientTokens": 1478,
-    "structureTokens": 3181
+    "analyzer": "go list -e -mod=readonly (go1.26.7)",
+    "orientTokens": 1613,
+    "structureTokens": 3337
   },
   "sverweij/dependency-cruiser": {
     "sha": "ec603451d07d",
     "files": 1093,
-    "directories": 329,
+    "sourceContainingDirectories": 329,
     "edges": 40,
     "entangled": 3,
     "layers": 3,
     "analyzer": "madge 8.0.0",
-    "orientTokens": 1631,
-    "structureTokens": 3614
+    "orientTokens": 1702,
+    "structureTokens": 3706
   },
   "usememos/memos": {
     "sha": "e99ae78012f2",
     "files": 858,
-    "directories": 105,
+    "sourceContainingDirectories": 105,
     "spans": [
       {
         "eco": "Go",
         "edges": 122,
         "layers": 9,
         "entangled": 0,
-        "analyzer": "go list -e -mod=readonly (go1.26.4)"
+        "analyzer": "go list -e -mod=readonly (go1.26.7)"
       },
       {
         "eco": "Node",
@@ -52,7 +52,7 @@
         "analyzer": "madge 8.0.0"
       }
     ],
-    "orientTokens": 1637,
-    "structureTokens": 3618
+    "orientTokens": 1721,
+    "structureTokens": 3690
   }
 }

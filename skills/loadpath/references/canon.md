@@ -28,6 +28,8 @@ Martin's sharpest line: frameworks are tools to be used, not architectures to be
 
 The test: show the top-level directory listing to someone who knows the business but not the code. If they cannot tell what the system does, the tree is projecting the wrong source.
 
+A path segment therefore earns its level only by naming a Subject, expressing an enforced language or project seam, or preserving a load-bearing constraint. A segment that only repeats the taxonomy above it owns no decision; collapse it. This is why no numeric maximum depth can substitute for reading what each level does.
+
 ## Package by component
 
 **Simon Brown, "Modular Monoliths" / package-by-component.** The middle path between package-by-layer (scatters every change) and package-by-feature (can leave a component's internals public). A component bundles everything for one coarse-grained capability behind one public type, keeping the rest package-private — a **seam** the compiler enforces rather than a convention the team remembers.
