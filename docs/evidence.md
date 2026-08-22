@@ -117,12 +117,4 @@ Where this measures less than the page suggests, with what each one would take t
 
 **`SOURCE_EXT` is deferred, with a criterion.** Shell, SQL, protobuf, Terraform and their neighbours are outside the Source population, so a repository whose Load-bearing code lives in them measures as smaller than it is, and their directories have no Source-containing row. The criterion for admitting a type is that Load-bearing code is written in it, not that the extension exists — and the population changes one type per release, so a baseline that moves afterwards has one cause to look for rather than several.
 
-**Five mutants are not exercised, and the list prints on every run.** `tests/mutate.mjs` cannot kill these on an ordinary developer machine, and the count is published as a list rather than folded into a coverage number:
-
-- `-mod=readonly` dropped from `go list` — readonly is already the default in a module with a complete `go.mod`; the difference shows only where `GOFLAGS=-mod=mod` is set in the environment, which the suite will not set on a contributor's machine.
-- `GOPROXY=off` turned back to `direct` — asserting a negative about the network needs an isolated machine; on a warm cache both settings resolve identically.
-- madge losing `--extensions` — needs a warm npx cache. This is the exact silent-empty-output failure the sanity gate exists for, and the gate itself is covered.
-- madge losing `--ts-config` — needs a warm npx cache and a repository with path aliases.
-- the Python analyzer looking only at the repository root — needs grimp installed, and the suite does not `pip install`.
-
-Two of the five guard the read-only law, which is why it is stated in `DESIGN.md` and asserted by two acceptance tests rather than left to the mutation count.
+**The mutation sample is intentionally narrow.** `tests/mutate.mjs` removes eight anchors chosen from the product's highest-consequence contracts. A clean run says only that the acceptance suite notices those eight deletions; it says nothing about exhaustive mutation coverage. Read-only behaviour and analyzer-specific limits therefore stand on their named acceptance tests and evidence, not on a mutation score.

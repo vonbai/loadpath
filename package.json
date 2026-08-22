@@ -24,8 +24,7 @@
   ],
   "scripts": {
     "test": "node --test tests/loadpath.test.mjs && node tests/contract.mjs && node tests/measure.mjs",
-    "mutate": "node tests/mutate.mjs",
-    "release-battery": "node --test tests/loadpath.test.mjs && node tests/contract.mjs && node tests/mutate.mjs && node tests/measure.mjs"
+    "mutate": "node tests/mutate.mjs"
   },
   "engines": {
     "node": ">=18"

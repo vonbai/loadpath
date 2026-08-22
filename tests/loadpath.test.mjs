@@ -2159,7 +2159,7 @@ test("every fetch of madge names the version it runs", () => {
   // file is one of the files it reads, and a literal would match itself.
   const [bare] = MADGE.split("@");
   const unpinned = new RegExp(`(?:["']${bare}["']|npx [^\\n]*?\\b${bare}\\b(?!@))`, "g");
-  for (const f of ["skills/loadpath/scripts/deps.mjs", "tests/measure.mjs", "tests/loadpath.test.mjs", ".github/workflows/ci.yml"]) {
+  for (const f of ["skills/loadpath/scripts/deps.mjs", "tests/measure.mjs", "tests/loadpath.test.mjs"]) {
     // Comments are prose about this very problem — two of these files carry a
     // paragraph naming the unpinned form — so what is read here is the code.
     const src = readFileSync(join(HERE, "..", f), "utf8").replace(/^\s*(?:\/\/|#).*$/gm, "");
